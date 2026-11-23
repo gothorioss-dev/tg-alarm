@@ -64,13 +64,13 @@ class BackupTest extends TestCase
 
     public function test_only_outdated_daily_copies_are_removed(): void
     {
-        foreach (['2026-10-01', '2026-11-08', '2026-11-09', '2026-11-10', '2026-11-22'] as $date) {
+        foreach (['2026-09-01', '2026-10-22', '2026-10-23', '2026-10-24', '2026-10-25', '2026-11-22'] as $date) {
             touch("{$this->dir}/daily-{$date}.sqlite");
         }
         touch("{$this->dir}/manual-2020-01-01.sqlite");
         app(DailyBackup::class)->runDue();
 
-        $this->assertSame(['2026-11-10', '2026-11-22', '2026-11-23'], $this->names());
+        $this->assertSame(['2026-10-24', '2026-10-25', '2026-11-22', '2026-11-23'], $this->names());
         $this->assertFileExists("{$this->dir}/manual-2020-01-01.sqlite");
     }
 

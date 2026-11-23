@@ -72,7 +72,7 @@ final class DailyBackup
         rsort($files);
 
         foreach (array_slice($files, (int) config('backup.keep_min')) as $file) {
-            if (substr(basename($file, '.sqlite'), 6) <= $oldest) {
+            if (substr(basename($file, '.sqlite'), 6) < $oldest) {
                 unlink($file);
             }
         }

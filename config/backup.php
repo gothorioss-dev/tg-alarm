@@ -5,7 +5,7 @@ return [
     'path' => env('BACKUP_PATH'),
 
     /* Copies older than this many days are removed. */
-    'keep_days' => max(1, (int) env('BACKUP_KEEP_DAYS', 14)),
+    'keep_days' => max(1, (int) env('BACKUP_KEEP_DAYS', 30)),
 
     /* The newest copies that are never removed, even when backups stop working. */
     'keep_min' => 3,
