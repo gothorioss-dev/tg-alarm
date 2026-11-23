@@ -4,6 +4,7 @@ namespace App\Ingest;
 
 use App\Models\Chat;
 use App\Models\Delivery;
+use App\Schedule\ChangeImpact;
 use App\Schedule\DaySchedule;
 use App\Schedule\Outage;
 use App\Telegram\Messages;
@@ -18,9 +19,22 @@ final class Outbox
     public function schedule(string $date, ?DaySchedule $old, DaySchedule $new, bool $correction, int $publicationId, string $source, string $url): void
     {
         $changed = $old ? $new->changedQueues($old) : null;
+        $now = CarbonImmutable::now(config('telegram.timezone'));
+        $minute = $now->format('Y-m-d') === $date ? $now->hour * 60 + $now->minute : null;
+        $impacts = [];
+
+        foreach ($changed ?? [] as $queue) {
+            $impacts[$queue] = new ChangeImpact($old->intervals($queue), $new->intervals($queue), $minute);
+        }
+
+        // Changes of the time that is already over are not worth a message.
+        if ($changed !== null && ! config('sources.notify_past_changes')) {
+            $changed = array_values(array_filter($changed, fn (string $queue) => ! $impacts[$queue]->isPast()));
+        }
+
         $expires = CarbonImmutable::parse($date, config('telegram.timezone'))->addDay()->utc();
 
-        $this->eachChat(function (Chat $chat, array $queues) use ($date, $old, $new, $correction, $publicationId, $source, $url, $changed, $expires) {
+        $this->eachChat(function (Chat $chat, array $queues) use ($date, $old, $new, $correction, $publicationId, $source, $url, $changed, $impacts, $now, $minute, $expires) {
             $queues = $changed === null ? $queues : array_values(array_intersect($queues, $changed));
 
             if ($queues === []) {
@@ -28,8 +42,8 @@ final class Outbox
             }
 
             $text = $old === null
-                ? $this->messages->newSchedule($date, $new, $queues, $source, $url)
-                : $this->messages->changedSchedule($date, $old, $new, $queues, $correction, $source, $url);
+                ? $this->messages->newSchedule($date, $new, $queues, $source, $url, $minute === null ? null : $now)
+                : $this->messages->changedSchedule($date, $new, array_intersect_key($impacts, array_flip($queues)), $correction, $source, $url, $now);
 
             $this->push($chat->telegram_id, "schedule:{$date}:{$publicationId}:{$chat->id}", $text, $expires);
         });

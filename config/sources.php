@@ -25,6 +25,9 @@ return [
     /* Emergency notices older than this are not sent. */
     'emergency_max_age_minutes' => 180,
 
+    /* Notify about changes that concern only the time that is already over. */
+    'notify_past_changes' => false,
+
     /* The admin is alerted after this many consecutive failed polls. */
     'alert_after_failures' => 10,
 

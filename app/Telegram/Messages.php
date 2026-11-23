@@ -2,6 +2,7 @@
 
 namespace App\Telegram;
 
+use App\Schedule\ChangeImpact;
 use App\Schedule\DaySchedule;
 use App\Schedule\Interval;
 use App\Schedule\Outage;
@@ -16,28 +17,36 @@ final class Messages
 
     public function __construct(private SourceRegistry $sources) {}
 
-    /** @param list<string> $queues */
-    public function newSchedule(string $date, DaySchedule $day, array $queues, string $source, string $url): string
+    /**
+     * @param  list<string>  $queues
+     * @param  CarbonImmutable|null  $now  current time when the schedule is for today
+     */
+    public function newSchedule(string $date, DaySchedule $day, array $queues, string $source, string $url, ?CarbonImmutable $now = null): string
     {
-        return "📅 <b>Графік відключень на {$this->date($date)}</b>\n\n"
-            .implode("\n\n", array_map(fn (string $q) => $this->queue($q, $day), $queues))
-            .$this->footer($source, $url);
+        $blocks = array_map(function (string $queue) use ($day, $now) {
+            $minute = $now === null ? null : $now->hour * 60 + $now->minute;
+            $impact = new ChangeImpact([], $day->intervals($queue), $minute);
+
+            return $this->impactNow($impact, $now).$this->queue($queue, $day);
+        }, $queues);
+
+        return "📅 <b>Графік відключень на {$this->date($date)}</b>\n\n".implode("\n\n", $blocks).$this->footer($source, $url);
     }
 
-    /** @param list<string> $queues */
-    public function changedSchedule(string $date, DaySchedule $old, DaySchedule $new, array $queues, bool $correction, string $source, string $url): string
+    /** @param array<string, ChangeImpact> $impacts by queue */
+    public function changedSchedule(string $date, DaySchedule $new, array $impacts, bool $correction, string $source, string $url, CarbonImmutable $now): string
     {
         $title = $correction ? '⚠️ <b>Уточнення графіка на ' : '🔄 <b>Зміни в графіку на ';
         $blocks = [];
 
-        foreach ($queues as $queue) {
-            $block = $this->queue($queue, $new);
+        foreach ($impacts as $queue => $impact) {
+            $block = $this->impactNow($impact, $now).$this->queue((string) $queue, $new);
 
-            if ($added = DaySchedule::subtract($new->intervals($queue), $old->intervals($queue))) {
-                $block .= "\n➕ Додано відключення: ".$this->intervals($added);
+            if ($impact->added !== []) {
+                $block .= "\n➕ Додано відключення: ".$this->changedIntervals($impact->added, $impact->minute);
             }
-            if ($removed = DaySchedule::subtract($old->intervals($queue), $new->intervals($queue))) {
-                $block .= "\n➖ Скасовано відключення: ".$this->intervals($removed);
+            if ($impact->removed !== []) {
+                $block .= "\n➖ Скасовано відключення: ".$this->changedIntervals($impact->removed, $impact->minute);
             }
             $blocks[] = $block;
         }
@@ -141,6 +150,32 @@ final class Messages
     {
         return "⏰ <b>Черга {$queue}: відключення через {$this->duration($now, $outage->start)}</b>\n"
             ."З {$outage->start->format('H:i')} до {$this->endTime($outage->end, $outage->start)} за графіком.";
+    }
+
+    /** The most urgent line: the change came when the outage was already due. */
+    private function impactNow(ChangeImpact $impact, ?CarbonImmutable $now): string
+    {
+        if ($now === null || $impact->minute === null || ! $impact->affectsNow()) {
+            return '';
+        }
+
+        $time = $now->format('H:i');
+        $end = fn (Interval $interval) => explode('–', (string) $interval)[1];
+
+        return match (true) {
+            $impact->is === null => "🟢 <b>Станом на {$time} відключення скасовано</b> (мало бути до {$end($impact->was)})\n",
+            $impact->was === null => "🔴 <b>Станом на {$time} відключення вже діє — до {$end($impact->is)}</b>\n",
+            default => "🔴 <b>Станом на {$time} діє відключення — до {$end($impact->is)}</b> (було до {$end($impact->was)})\n",
+        };
+    }
+
+    /** @param list<Interval> $intervals */
+    private function changedIntervals(array $intervals, ?int $minute): string
+    {
+        return implode(', ', array_map(
+            fn (Interval $interval) => $interval.($minute !== null && $interval->to <= $minute ? ' (уже минуло)' : ''),
+            $intervals,
+        ));
     }
 
     private function status(string $queue, OutageTimeline $timeline): string
