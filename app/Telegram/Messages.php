@@ -81,7 +81,7 @@ final class Messages
     public function chooseQueue(): string
     {
         return "Оберіть чергу (можна кілька). Надсилатиму графік відключень і зміни лише для обраних черг.\n\n"
-            .'Свою чергу можна дізнатися на сайті Запоріжжяобленерго.';
+            .'Свою чергу можна дізнатися <a href="'.e(config('telegram.queue_lookup_url')).'">на сайті Запоріжжяобленерго</a>.';
     }
 
     public function help(): string

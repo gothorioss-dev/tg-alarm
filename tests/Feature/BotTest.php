@@ -43,6 +43,7 @@ class BotTest extends TestCase
     {
         $this->fake();
         $this->update($this->message('/start'));
+        Http::assertSent(fn ($r) => str_contains($r['text'] ?? '', '<a href="https://www.zoe.com.ua/outage/">'));
         foreach (['q:1.1', 'q:5.2', 'q:1.1', 'q:6.1', 'q:9.9'] as $data) {
             $this->update($this->press($data));
         }
