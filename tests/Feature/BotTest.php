@@ -267,6 +267,39 @@ class BotTest extends TestCase
         return Delivery::query()->create(['telegram_id' => 5, 'dedupe_key' => uniqid(), 'text' => 't', 'available_at' => now()]);
     }
 
+    public function test_sound_can_be_turned_off_without_losing_messages(): void
+    {
+        $this->fake();
+        $chat = Chat::query()->create(['telegram_id' => 5, 'type' => 'private']);
+        $chat->subscriptions()->create(['queue' => '1.1']);
+        $sentSilently = fn (bool $silent) => Http::assertSent(fn ($r) => ($r['text'] ?? '') === 't' && $r['disable_notification'] === $silent);
+
+        $this->delivery();
+        app(DeliverySender::class)->flush();
+        $sentSilently(false);
+
+        $this->update($this->press('mute'));
+        $this->assertTrue($chat->refresh()->silent);
+        $this->assertNotFalse($chat->active);
+        $this->delivery();
+        app(DeliverySender::class)->flush();
+        $sentSilently(true);
+
+        // Service alerts always sound.
+        Delivery::query()->create(['telegram_id' => 5, 'dedupe_key' => 'admin:x', 'text' => 'alert', 'available_at' => now()]);
+        app(DeliverySender::class)->flush();
+        Http::assertSent(fn ($r) => ($r['text'] ?? '') === 'alert' && $r['disable_notification'] === false);
+
+        $this->update($this->press('sound'));
+        $this->assertFalse($chat->refresh()->silent);
+    }
+
+    public function test_old_settings_button_still_works(): void
+    {
+        $this->assertSame('settings', Keyboards::screen('⚙️ Налаштування'));
+        $this->assertSame('settings', Keyboards::screen('⚙ Налаштування'));
+    }
+
     public function test_blocked_chat_is_deactivated(): void
     {
         Http::fake(['*' => Http::response(['ok' => false, 'error_code' => 403, 'description' => 'Forbidden: bot was blocked'], 403)]);

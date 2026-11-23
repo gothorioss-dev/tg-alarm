@@ -12,7 +12,10 @@ final class Keyboards
 
     public const QUEUES = '⚡ Мої черги';
 
-    public const SETTINGS = '⚙️ Налаштування';
+    public const SETTINGS = '🔔 Сповіщення';
+
+    /** Label of the settings button in keyboards sent earlier. */
+    private const OLD_SETTINGS = '⚙️ Налаштування';
 
     public const GUIDE = '📖 Довідник';
 
@@ -50,7 +53,7 @@ final class Keyboards
         return match ($plain($text)) {
             $plain(self::SCHEDULE) => 'schedule',
             $plain(self::QUEUES) => 'queue',
-            $plain(self::SETTINGS) => 'settings',
+            $plain(self::SETTINGS), $plain(self::OLD_SETTINGS) => 'settings',
             $plain(self::GUIDE) => 'help',
             $plain(self::INVITE) => 'invite',
             default => null,
@@ -68,8 +71,11 @@ final class Keyboards
 
         return ['inline_keyboard' => [
             [$chat->active
-                ? self::inline('🔕 Вимкнути сповіщення', 'stop')
-                : self::inline('🔔 Увімкнути сповіщення', 'enable')],
+                ? self::inline('🔕 Не надсилати повідомлення', 'stop')
+                : self::inline('🔔 Надсилати повідомлення', 'enable')],
+            [$chat->silent
+                ? self::inline('🔊 Увімкнути звук', 'sound')
+                : self::inline('🔇 Вимкнути звук', 'mute')],
             $minutes,
             [self::inline($mark($chat->remind_minutes === null).'Не нагадувати', 'r:0')],
         ]];

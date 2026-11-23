@@ -95,6 +95,9 @@ final class UpdateHandler
         } elseif ($data === 'stop' || $data === 'enable') {
             $chat->update(['active' => $data === 'enable']);
             $data = 'settings';
+        } elseif ($data === 'mute' || $data === 'sound') {
+            $chat->update(['silent' => $data === 'mute']);
+            $data = 'settings';
         } elseif ($data === 'done') {
             if ($chat->subscriptions()->exists()) {
                 $data = 'schedule';
@@ -154,7 +157,10 @@ final class UpdateHandler
     /** The message must stay in the chat: some clients drop the keyboard together with it. */
     private function sendWithKeyboard(Chat $chat, string $text): int
     {
-        $sent = $this->telegram->send($chat->telegram_id, $text, ['reply_markup' => Keyboards::bottom()]);
+        $sent = $this->telegram->send($chat->telegram_id, $text, [
+            'reply_markup' => Keyboards::bottom(),
+            'disable_notification' => $chat->silent,
+        ]);
         $chat->update(['keyboard_version' => Keyboards::version()]);
 
         return (int) ($sent['message_id'] ?? 0);
@@ -183,7 +189,7 @@ final class UpdateHandler
         return match ($screen) {
             'schedule' => $this->showSchedule($chat, $messageId),
             'queue' => $this->showQueues($chat, $messageId),
-            'settings' => $this->render($chat, $this->messages->settings($chat->active, $chat->remind_minutes), Keyboards::settings($chat), $messageId),
+            'settings' => $this->render($chat, $this->messages->settings($chat->active, $chat->silent, $chat->remind_minutes), Keyboards::settings($chat), $messageId),
             'help' => $this->render($chat, $this->messages->guide(), null, $messageId),
             'invite' => $this->showInvite($chat, $messageId),
         };
@@ -278,7 +284,7 @@ final class UpdateHandler
             }
         }
 
-        return (int) ($this->telegram->send($chat->telegram_id, $text, $extra)['message_id'] ?? 0);
+        return (int) ($this->telegram->send($chat->telegram_id, $text, ['disable_notification' => $chat->silent, ...$extra])['message_id'] ?? 0);
     }
 
     private function delete(Chat $chat, int $messageId): void

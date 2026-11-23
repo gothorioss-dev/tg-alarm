@@ -99,7 +99,7 @@ class ReminderTest extends TestCase
         $this->assertSame(60, $this->chat->refresh()->remind_minutes);
         $this->press('r:0');
         $this->assertNull($this->chat->refresh()->remind_minutes);
-        $this->assertStringContainsString('Налаштування', $this->press('settings'));
+        $this->assertStringContainsString('Сповіщення', $this->press('settings'));
     }
 
     public function test_schedule_after_selection_comes_from_stored_data(): void

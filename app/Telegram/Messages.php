@@ -89,7 +89,7 @@ final class Messages
             $parts[] = '<i>Дані на '.CarbonImmutable::parse($checkedAt, 'UTC')->setTimezone(config('telegram.timezone'))->format('H:i, d.m').'</i>';
         }
         if (! $active) {
-            $parts[] = '🔕 Сповіщення вимкнено.';
+            $parts[] = '🔕 Повідомлення не надсилаються.';
         }
 
         return implode("\n\n", $parts);
@@ -117,7 +117,7 @@ final class Messages
             ."<b>Кнопки внизу</b>\n"
             ."📅 <b>Графік</b> — відключення на сьогодні та завтра\n"
             ."⚡ <b>Мої черги</b> — додати або прибрати чергу\n"
-            ."⚙️ <b>Налаштування</b> — сповіщення та нагадування перед відключенням\n"
+            ."🔔 <b>Сповіщення</b> — повідомлення, звук і нагадування перед відключенням\n"
             ."📖 <b>Довідник</b> — ця підказка\n"
             ."👥 <b>Запросити</b> — надіслати бота рідним або сусідам\n\n"
             ."❗ <b>Важливо</b>\n"
@@ -155,7 +155,7 @@ final class Messages
 
     public function welcomeBack(): string
     {
-        return '👋 Вітаю! Сповіщення увімкнено, ваші черги збережено. Перевірте їх нижче.';
+        return '👋 Вітаю! Повідомлення увімкнено, ваші черги збережено. Перевірте їх нижче.';
     }
 
     public function menuUpdated(): string
@@ -180,13 +180,14 @@ final class Messages
         return 'Оберіть хоча б одну чергу.';
     }
 
-    public function settings(bool $active, ?int $remindMinutes): string
+    public function settings(bool $active, bool $silent, ?int $remindMinutes): string
     {
-        return "⚙️ <b>Налаштування</b>\n\n"
-            .'Сповіщення: '.($active ? '🔔 увімкнено' : '🔕 вимкнено')."\n"
+        return "🔔 <b>Сповіщення</b>\n\n"
+            .'Повідомлення: '.($active ? 'надсилаються' : 'не надсилаються')."\n"
+            .'Звук: '.($silent ? '🔇 без звуку' : '🔊 зі звуком')."\n"
             .'Нагадування перед відключенням: '.$this->reminderLabel($remindMinutes)
-            .($active ? '' : "\n\nПоки сповіщення вимкнено, нагадування теж не надходять.")
-            ."\n\nНижче оберіть, за скільки хвилин нагадувати:";
+            .($active ? '' : "\n\nПоки повідомлення не надсилаються, нагадувань теж не буде.")
+            ."\n\nНижче можна змінити. Цифри — за скільки хвилин нагадувати.";
     }
 
     public function reminderLabel(?int $minutes): string
