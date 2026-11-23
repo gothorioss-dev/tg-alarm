@@ -8,4 +8,6 @@ return [
     'queue_lookup_url' => 'https://www.zoe.com.ua/outage/',
     // Choices offered in the reminder settings.
     'remind_minutes' => [10, 15, 30, 60],
+    // Records of the delivery log older than this many days are removed.
+    'deliveries_keep_days' => max(1, (int) env('DELIVERIES_KEEP_DAYS', 30)),
 ];

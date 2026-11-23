@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\Chat;
 use App\Models\Delivery;
+use App\Telegram\DeliveryCleanup;
 use App\Telegram\DeliverySender;
 use App\Telegram\Keyboards;
 use App\Telegram\Messages;
@@ -331,6 +332,22 @@ class BotTest extends TestCase
         config(['telegram.admin_id' => null]);
         $this->assertFalse(Keyboards::isAdmin(0));
         $this->assertNull(Keyboards::screen(Keyboards::STATISTICS, 999));
+    }
+
+    public function test_outdated_delivery_records_are_removed(): void
+    {
+        foreach (['old' => [31, 'sent'], 'failed' => [31, 'failed'], 'expired' => [31, 'expired'], 'waiting' => [31, 'pending'], 'recent' => [29, 'sent']] as $key => [$days, $status]) {
+            $delivery = new Delivery(['telegram_id' => 5, 'dedupe_key' => $key, 'text' => 't', 'status' => $status, 'available_at' => now()]);
+            $delivery->created_at = now()->subDays($days);
+            $delivery->save();
+        }
+
+        app(DeliveryCleanup::class)->runDue();
+        $this->assertEqualsCanonicalizing(['waiting', 'recent'], Delivery::query()->pluck('dedupe_key')->all());
+
+        config(['telegram.deliveries_keep_days' => 10]);
+        app(DeliveryCleanup::class)->runDue();
+        $this->assertSame(['waiting'], Delivery::query()->pluck('dedupe_key')->all());
     }
 
     public function test_blocked_chat_is_deactivated(): void
