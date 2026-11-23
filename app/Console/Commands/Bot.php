@@ -43,9 +43,10 @@ class Bot extends Command
             try {
                 $updates = $telegram->call('getUpdates', [
                     'offset' => $offset,
-                    'timeout' => 25,
+                    // A stop signal is handled only after the request returns, so it is kept short.
+                    'timeout' => 10,
                     'allowed_updates' => ['message', 'callback_query', 'my_chat_member'],
-                ], 35);
+                ], 20);
             } catch (TelegramException $e) {
                 Log::warning("getUpdates failed: {$e->getMessage()}");
                 Sleep::for(max(5, $e->retryAfter()))->seconds();
