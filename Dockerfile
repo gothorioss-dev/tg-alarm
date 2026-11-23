@@ -12,8 +12,8 @@ COPY . .
 RUN composer dump-autoload --no-dev --optimize
 
 FROM base AS production
-RUN adduser -D -u 1000 app && mkdir /data && chown app:app /data
+RUN adduser -D -u 1000 app && mkdir /data /backups && chown app:app /data /backups && chmod 700 /backups
 COPY --from=vendor --chown=app:app /app /app
 USER app
-ENV DB_DATABASE=/data/database.sqlite
+ENV DB_DATABASE=/data/database.sqlite BACKUP_PATH=/backups
 CMD ["php", "artisan", "list"]

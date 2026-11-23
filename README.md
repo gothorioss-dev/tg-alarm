@@ -14,7 +14,22 @@ docker compose logs -f worker bot
 
 Обновление: автоматически после push или merge в `main` (см. «CI/CD»).
 
-Бэкап БД: `docker compose stop && docker compose cp worker:/data/. ./backup && docker compose start worker bot`
+### Бэкап
+
+Worker раз в сутки (после 03:30 по Киеву) делает проверенную копию базы в volume `backups` и удаляет копии старше `BACKUP_KEEP_DAYS` дней (по умолчанию 14, последние 3 остаются всегда). О сбое сообщает администратору.
+
+```bash
+docker compose exec worker ls -l /backups                        # список
+docker compose cp worker:/backups/daily-ГГГГ-ММ-ДД.sqlite .       # скачать
+```
+
+Восстановление (текущая база заменяется, её копия остаётся рядом):
+
+```bash
+docker compose stop worker bot
+docker compose run --rm --no-deps worker sh -c 'cd /data && rm -f before-restore.sqlite && php -r "(new PDO(\"sqlite:database.sqlite\"))->exec(\"VACUUM INTO \\x27before-restore.sqlite\\x27\");" && rm -f database.sqlite-wal database.sqlite-shm && cp /backups/daily-ГГГГ-ММ-ДД.sqlite database.sqlite'
+docker compose up -d --no-build
+```
 
 ## CI/CD
 
