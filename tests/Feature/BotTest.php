@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\Chat;
 use App\Models\Delivery;
 use App\Telegram\DeliverySender;
+use App\Telegram\Keyboards;
 use App\Telegram\TelegramClient;
 use App\Telegram\TelegramException;
 use App\Telegram\UpdateHandler;
@@ -82,6 +83,58 @@ class BotTest extends TestCase
         $this->fake();
         $this->update($this->message('/start@other_bot', 'group', -5));
         Http::assertNothingSent();
+    }
+
+    public function test_private_chat_is_driven_by_buttons(): void
+    {
+        $this->fake();
+        $this->update($this->message('/start'));
+        Http::assertSent(fn ($r) => ($r['reply_markup']['keyboard'][0][0]['text'] ?? '') === Keyboards::SCHEDULE);
+
+        $this->update($this->press('done'));
+        Http::assertSent(fn ($r) => ($r['show_alert'] ?? false) === true);
+
+        $this->update($this->press('q:5.2'));
+        $this->update($this->message(Keyboards::STOP));
+        $chat = Chat::query()->sole();
+        $this->assertFalse($chat->active);
+        Http::assertSent(fn ($r) => ($r['reply_markup']['keyboard'][1][0]['text'] ?? '') === Keyboards::START);
+
+        // Changing queues does not silently turn notifications back on.
+        $this->update($this->press('q:6.1'));
+        $this->assertFalse($chat->refresh()->active);
+
+        $this->update($this->message(Keyboards::START));
+        $this->assertTrue($chat->refresh()->active);
+        $this->assertSame(['5.2', '6.1'], $chat->subscriptions->pluck('queue')->all());
+    }
+
+    public function test_group_buttons_schedule_is_public_and_settings_are_not(): void
+    {
+        $this->fake();
+        $chat = Chat::query()->create(['telegram_id' => -5, 'type' => 'supergroup', 'active' => true]);
+        $chat->subscriptions()->create(['queue' => '1.1']);
+
+        $this->update($this->press('schedule', 'supergroup', -5));
+        Http::assertSent(fn ($r) => ($r['reply_markup']['inline_keyboard'][0][0]['callback_data'] ?? '') === 'schedule');
+
+        $this->update($this->press('stop', 'supergroup', -5));
+        $this->assertTrue($chat->refresh()->active);
+
+        $this->memberStatus = 'creator';
+        $this->update($this->press('stop', 'supergroup', -5));
+        $this->assertFalse($chat->refresh()->active);
+    }
+
+    public function test_repeated_tap_is_harmless(): void
+    {
+        Http::fake(fn ($request) => str_contains($request->url(), 'editMessage')
+            ? Http::response(['ok' => false, 'error_code' => 400, 'description' => 'Bad Request: message is not modified'], 400)
+            : Http::response(['ok' => true, 'result' => true]));
+        $this->update($this->press('q:1.1'));
+        $this->update($this->press('done'));
+
+        $this->assertSame(1, Chat::query()->sole()->subscriptions()->count());
     }
 
     private function delivery(): Delivery
