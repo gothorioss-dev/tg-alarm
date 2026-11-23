@@ -45,11 +45,11 @@ final class DeliverySender
         try {
             $isAdminAlert = str_starts_with($delivery->dedupe_key, 'admin:');
             $this->telegram->send($delivery->telegram_id, $delivery->text, [
-                'reply_markup' => Keyboards::bottom(),
+                'reply_markup' => Keyboards::bottom($delivery->telegram_id),
                 // Service alerts always sound.
                 'disable_notification' => $chat !== null && $chat->silent && ! $isAdminAlert,
             ]);
-            $chat?->update(['keyboard_version' => Keyboards::version()]);
+            $chat?->update(['keyboard_version' => Keyboards::version($delivery->telegram_id)]);
             $delivery->update(['status' => Delivery::SENT, 'sent_at' => now(), 'error' => null]);
 
             return true;

@@ -135,7 +135,7 @@ class BotTest extends TestCase
         Http::fake(function ($r) use (&$next) {
             return Http::response(['ok' => true, 'result' => str_ends_with($r->url(), 'sendMessage') ? ['message_id' => $next++] : true]);
         });
-        $chat = Chat::query()->create(['telegram_id' => 5, 'type' => 'private', 'menu_message_id' => 40, 'keyboard_version' => Keyboards::version()]);
+        $chat = Chat::query()->create(['telegram_id' => 5, 'type' => 'private', 'menu_message_id' => 40, 'keyboard_version' => Keyboards::version(5)]);
         $chat->subscriptions()->create(['queue' => '1.1']);
 
         $this->update($this->message(Keyboards::SCHEDULE)); // 60
@@ -176,9 +176,9 @@ class BotTest extends TestCase
         $this->fake();
         Chat::query()->create(['telegram_id' => 5, 'type' => 'private'])->subscriptions()->create(['queue' => '1.1']);
 
-        foreach (array_merge(...Keyboards::bottom()['keyboard']) as $button) {
-            $this->assertNotNull(Keyboards::screen($button['text']));
-            $this->assertNotNull(Keyboards::screen(str_replace("\u{FE0F}", '', $button['text'])));
+        foreach (array_merge(...Keyboards::bottom(5)['keyboard']) as $button) {
+            $this->assertNotNull(Keyboards::screen($button['text'], 5));
+            $this->assertNotNull(Keyboards::screen(str_replace("\u{FE0F}", '', $button['text']), 5));
             $this->update($this->message($button['text']));
         }
 
@@ -234,7 +234,7 @@ class BotTest extends TestCase
         $this->assertSame(1, $this->keyboardMessages());
         $this->update($this->message(Keyboards::GUIDE));
         $this->assertSame(1, $this->keyboardMessages());
-        $this->assertSame(Keyboards::version(), $chat->refresh()->keyboard_version);
+        $this->assertSame(Keyboards::version(5), $chat->refresh()->keyboard_version);
 
         // A schedule carries the keyboard, so no extra message is needed.
         $chat->update(['keyboard_version' => 'old']);
@@ -296,8 +296,41 @@ class BotTest extends TestCase
 
     public function test_old_settings_button_still_works(): void
     {
-        $this->assertSame('settings', Keyboards::screen('⚙️ Налаштування'));
-        $this->assertSame('settings', Keyboards::screen('⚙ Налаштування'));
+        $this->assertSame('settings', Keyboards::screen('⚙️ Налаштування', 5));
+        $this->assertSame('settings', Keyboards::screen('⚙ Налаштування', 5));
+    }
+
+    public function test_statistics_are_shown_to_the_admin_only(): void
+    {
+        $this->fake();
+        $this->assertNotContains(Keyboards::STATISTICS, array_column(array_merge(...Keyboards::bottom(5)['keyboard']), 'text'));
+        $this->assertContains(Keyboards::STATISTICS, array_column(array_merge(...Keyboards::bottom(999)['keyboard']), 'text'));
+        $this->assertNotSame(Keyboards::version(5), Keyboards::version(999));
+
+        foreach ([5 => ['5.2', '1.1'], 999 => ['5.2'], 6 => ['2.1'], 7 => []] as $id => $queues) {
+            $chat = Chat::query()->create(['telegram_id' => $id, 'type' => 'private', 'active' => $id !== 6, 'silent' => $id === 5]);
+            foreach ($queues as $queue) {
+                $chat->subscriptions()->create(['queue' => $queue]);
+            }
+        }
+
+        $this->update($this->message(Keyboards::STATISTICS));
+        $this->update($this->press('stats'));
+        Http::assertNotSent(fn ($r) => str_contains($r['text'] ?? '', 'Статистика'));
+
+        $this->update($this->message(Keyboards::STATISTICS, 'private', 999));
+        Http::assertSent(fn ($r) => ($r['chat_id'] ?? 0) === 999
+            && str_contains($r['text'] ?? '', 'Користувачів: <b>4</b>, отримують: <b>2</b>')
+            && str_contains($r['text'], 'без звуку: 1')
+            && str_contains($r['text'], "1.1 — 1\n5.2 — 2\n")
+            && ! str_contains($r['text'], '2.1'));
+    }
+
+    public function test_statistics_screen_is_available_without_an_admin_id_to_nobody(): void
+    {
+        config(['telegram.admin_id' => null]);
+        $this->assertFalse(Keyboards::isAdmin(0));
+        $this->assertNull(Keyboards::screen(Keyboards::STATISTICS, 999));
     }
 
     public function test_blocked_chat_is_deactivated(): void

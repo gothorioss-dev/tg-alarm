@@ -16,7 +16,7 @@ final class UpdateHandler
 
     private ?string $botLink = null;
 
-    public function __construct(private TelegramClient $telegram, private Messages $messages) {}
+    public function __construct(private TelegramClient $telegram, private Messages $messages, private Statistics $statistics) {}
 
     /** @param array<string, mixed> $update */
     public function handle(array $update): void
@@ -47,7 +47,7 @@ final class UpdateHandler
 
             return;
         }
-        if ($screen = Keyboards::screen($text)) {
+        if ($screen = Keyboards::screen($text, $chat->telegram_id)) {
             $this->updateKeyboard($chat, $screen);
             $this->open($chat, $screen);
             $this->delete($chat, (int) $message['message_id']);
@@ -146,7 +146,7 @@ final class UpdateHandler
     /** Replaces an outdated bottom keyboard; a schedule brings the keyboard itself. */
     private function updateKeyboard(Chat $chat, string $screen): void
     {
-        if ($chat->keyboard_version === Keyboards::version()
+        if ($chat->keyboard_version === Keyboards::version($chat->telegram_id)
             || ($screen === 'schedule' && $chat->subscriptions()->exists())) {
             return;
         }
@@ -158,10 +158,10 @@ final class UpdateHandler
     private function sendWithKeyboard(Chat $chat, string $text): int
     {
         $sent = $this->telegram->send($chat->telegram_id, $text, [
-            'reply_markup' => Keyboards::bottom(),
+            'reply_markup' => Keyboards::bottom($chat->telegram_id),
             'disable_notification' => $chat->silent,
         ]);
-        $chat->update(['keyboard_version' => Keyboards::version()]);
+        $chat->update(['keyboard_version' => Keyboards::version($chat->telegram_id)]);
 
         return (int) ($sent['message_id'] ?? 0);
     }
@@ -192,6 +192,7 @@ final class UpdateHandler
             'settings' => $this->render($chat, $this->messages->settings($chat->active, $chat->silent, $chat->remind_minutes), Keyboards::settings($chat), $messageId),
             'help' => $this->render($chat, $this->messages->guide(), null, $messageId),
             'invite' => $this->showInvite($chat, $messageId),
+            'stats' => $this->render($chat, $this->messages->statistics($this->statistics->collect()), null, $messageId),
         };
     }
 

@@ -21,31 +21,39 @@ final class Keyboards
 
     public const INVITE = '👥 Запросити';
 
+    /** Shown to the admin only. */
+    public const STATISTICS = '📊 Статистика';
+
     /**
      * Main menu. A message carries either this or inline buttons.
      *
      * @return array<string, mixed>
      */
-    public static function bottom(): array
+    public static function bottom(int $telegramId): array
     {
         return [
             'keyboard' => [
                 [['text' => self::SCHEDULE], ['text' => self::QUEUES]],
                 [['text' => self::SETTINGS], ['text' => self::GUIDE]],
-                [['text' => self::INVITE]],
+                [['text' => self::INVITE], ...(self::isAdmin($telegramId) ? [['text' => self::STATISTICS]] : [])],
             ],
             'resize_keyboard' => true,
         ];
     }
 
-    /** Changes together with the bottom keyboard. */
-    public static function version(): string
+    public static function isAdmin(int $telegramId): bool
     {
-        return substr(hash('sha256', json_encode(self::bottom(), JSON_THROW_ON_ERROR)), 0, 8);
+        return $telegramId !== 0 && $telegramId === (int) config('telegram.admin_id');
+    }
+
+    /** Changes together with the bottom keyboard. */
+    public static function version(int $telegramId): string
+    {
+        return substr(hash('sha256', json_encode(self::bottom($telegramId), JSON_THROW_ON_ERROR)), 0, 8);
     }
 
     /** Screen opened by a bottom button, null for any other text. */
-    public static function screen(string $text): ?string
+    public static function screen(string $text, int $telegramId): ?string
     {
         // Clients may drop the emoji variation selector.
         $plain = fn (string $value) => str_replace("\u{FE0F}", '', $value);
@@ -56,6 +64,7 @@ final class Keyboards
             $plain(self::SETTINGS), $plain(self::OLD_SETTINGS) => 'settings',
             $plain(self::GUIDE) => 'help',
             $plain(self::INVITE) => 'invite',
+            $plain(self::STATISTICS) => self::isAdmin($telegramId) ? 'stats' : null,
             default => null,
         };
     }

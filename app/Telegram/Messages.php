@@ -153,6 +153,23 @@ final class Messages
         return 'Графік відключень світла у Запорізькій області: зміни та нагадування для вашої черги. Неофіційний бот.';
     }
 
+    /** @param array{total: int, active: int, new: int, reminders: int, silent: int, queues: array<string, int>, failing: list<string>} $stats */
+    public function statistics(array $stats): string
+    {
+        $queues = [];
+
+        foreach ($stats['queues'] as $queue => $count) {
+            $queues[] = "{$queue} — {$count}";
+        }
+
+        return "📊 <b>Статистика</b>\n\n"
+            ."Користувачів: <b>{$stats['total']}</b>, отримують: <b>{$stats['active']}</b>\n"
+            ."Нових за 7 днів: {$stats['new']}\n"
+            ."З нагадуваннями: {$stats['reminders']}, без звуку: {$stats['silent']}\n\n"
+            ."<b>Черги</b>\n".($queues === [] ? 'немає' : implode("\n", $queues))."\n\n"
+            .'Джерела: '.($stats['failing'] === [] ? '✅ працюють' : '⚠️ збій — '.e(implode(', ', $stats['failing'])));
+    }
+
     public function welcomeBack(): string
     {
         return '👋 Вітаю! Повідомлення увімкнено, ваші черги збережено. Перевірте їх нижче.';
