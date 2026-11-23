@@ -69,11 +69,12 @@ final class Messages
         }
 
         $today = $timeline->now()->format('Y-m-d');
+        $minute = $timeline->now()->hour * 60 + $timeline->now()->minute;
         $parts = [];
 
         foreach ($timeline->days() as $date => $day) {
             $parts[] = '📅 <b>'.($date === $today ? 'Сьогодні' : 'Завтра').", {$this->date($date)}</b>\n\n"
-                .implode("\n\n", array_map(fn (string $q) => $this->queue($q, $day), $queues));
+                .implode("\n\n", array_map(fn (string $q) => $this->queue($q, $day, $date === $today ? $minute : null), $queues));
         }
 
         if ($parts === []) {
@@ -95,9 +96,10 @@ final class Messages
         return implode("\n\n", $parts);
     }
 
-    public function queue(string $queue, DaySchedule $day): string
+    /** @param int|null $minute current minute of the day: outages that are over get a mark */
+    public function queue(string $queue, DaySchedule $day, ?int $minute = null): string
     {
-        return "<b>Черга {$queue}</b>\n".$this->outages($queue, $day);
+        return "<b>Черга {$queue}</b>\n".$this->outages($queue, $day, $minute);
     }
 
     public function chooseQueue(): string
@@ -233,11 +235,18 @@ final class Messages
             ."{$day}з {$next->start->format('H:i')} до {$this->endTime($next->end, $next->start)} (через {$this->duration($now, $next->start)})";
     }
 
-    private function outages(string $queue, DaySchedule $day): string
+    private function outages(string $queue, DaySchedule $day, ?int $minute = null): string
     {
         $intervals = $day->intervals($queue);
 
-        return $intervals === [] ? 'Відключень за графіком немає' : $this->list($intervals);
+        if ($intervals === []) {
+            return 'Відключень за графіком немає';
+        }
+
+        return implode("\n", array_map(
+            fn (Interval $interval) => $this->line($interval).($minute !== null && $interval->to <= $minute ? ' (минуло)' : ''),
+            $intervals,
+        ));
     }
 
     /**
@@ -254,7 +263,7 @@ final class Messages
                 default => ' (цей час уже почався)',
             };
 
-            return '• '.str_replace('–', ' до ', "з {$interval}").$note;
+            return $this->line($interval).$note;
         }, $intervals));
     }
 
@@ -297,5 +306,10 @@ final class Messages
 
             return '• '.($page === '' ? $label : '<a href="'.e($page)."\">{$label}</a>");
         }, $keys));
+    }
+
+    private function line(Interval $interval): string
+    {
+        return '• '.str_replace('–', ' до ', "з {$interval}");
     }
 }

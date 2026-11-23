@@ -120,6 +120,23 @@ class ReminderTest extends TestCase
         $this->assertStringContainsString('Це лише графік', $this->press('help'));
     }
 
+    public function test_only_finished_outages_of_today_are_marked(): void
+    {
+        $this->schedule('2026-11-23', [[630, 810], [1020, 1320]]);
+        $this->schedule('2026-11-24', [[60, 120]]);
+
+        $this->at('13:29');
+        $this->assertStringNotContainsString('минуло', $this->press('schedule'));
+
+        $this->at('13:30');
+        $text = $this->press('schedule');
+        $this->assertStringContainsString("• з 10:30 до 13:30 (минуло)\n• з 17:00 до 22:00\n", $text);
+        $this->assertSame(1, substr_count($text, 'минуло'));
+
+        $this->at('22:00');
+        $this->assertSame(2, substr_count($this->press('schedule'), 'минуло'));
+    }
+
     public function test_first_start_shows_guide_and_every_start_shows_selection(): void
     {
         $texts = [];
