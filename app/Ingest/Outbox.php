@@ -6,6 +6,7 @@ use App\Models\Chat;
 use App\Models\Delivery;
 use App\Schedule\ChangeImpact;
 use App\Schedule\DaySchedule;
+use App\Schedule\Interval;
 use App\Schedule\Outage;
 use App\Telegram\Messages;
 use Carbon\CarbonImmutable;
@@ -25,6 +26,7 @@ final class Outbox
 
         foreach ($changed ?? [] as $queue) {
             $impacts[$queue] = new ChangeImpact($old->intervals($queue), $new->intervals($queue), $minute);
+            $this->forgetReminders($date, $queue, $old, $new, $publicationId);
         }
 
         $expires = CarbonImmutable::parse($date, config('telegram.timezone'))->addDay()->utc();
@@ -56,6 +58,18 @@ final class Outbox
         ));
     }
 
+    public function notice(int $publicationId, string $text, string $source, string $url): void
+    {
+        $message = $this->messages->notice($text, $source, $url);
+
+        $this->eachChat(fn (Chat $chat) => $this->push(
+            $chat->telegram_id,
+            "notice:{$publicationId}:{$chat->id}",
+            $message,
+            CarbonImmutable::now()->addHours(3),
+        ));
+    }
+
     public function admin(string $key, string $text): void
     {
         Log::warning($text);
@@ -73,6 +87,28 @@ final class Outbox
             $this->messages->reminder($queue, $outage, $now),
             $outage->start->utc(),
         );
+    }
+
+    /** A called off outage that returns later is a new event and needs a new reminder. */
+    private function forgetReminders(string $date, string $queue, DaySchedule $old, DaySchedule $new, int $publicationId): void
+    {
+        $starts = array_map(fn (Interval $interval) => $interval->from, $new->intervals($queue));
+
+        foreach ($old->intervals($queue) as $interval) {
+            if (in_array($interval->from, $starts, true)) {
+                continue;
+            }
+
+            $start = CarbonImmutable::parse($date, config('telegram.timezone'))
+                ->setTime(intdiv($interval->from, 60), $interval->from % 60)->timestamp;
+
+            foreach (Delivery::query()->where('dedupe_key', 'like', "remind:%:{$queue}:{$start}")->get() as $delivery) {
+                $delivery->update([
+                    'dedupe_key' => "{$delivery->dedupe_key}:void:{$publicationId}",
+                    'status' => $delivery->status === Delivery::PENDING ? Delivery::EXPIRED : $delivery->status,
+                ]);
+            }
+        }
     }
 
     private function eachChat(callable $callback): void

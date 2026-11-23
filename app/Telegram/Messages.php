@@ -61,6 +61,13 @@ final class Messages
         return "🚨 <b>Аварійні відключення</b>\n\n".e(mb_strimwidth($text, 0, 3000, '…')).$note.$this->footer($source, $url);
     }
 
+    /** A text about outages without a list of queues. */
+    public function notice(string $text, string $source, string $url): string
+    {
+        return "ℹ️ <b>Повідомлення про графік</b>\n\n".e(mb_strimwidth($text, 0, 3000, '…'))
+            ."\n\nГрафік у боті може бути неактуальним.".$this->footer($source, $url);
+    }
+
     /** @param list<string> $queues */
     public function currentSchedule(OutageTimeline $timeline, array $queues, bool $active = true, ?string $checkedAt = null): string
     {

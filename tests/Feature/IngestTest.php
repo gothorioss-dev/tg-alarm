@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Ingest\Ingestor;
 use App\Ingest\Poller;
+use App\Ingest\Reminders;
 use App\Models\Chat;
 use App\Models\Delivery;
 use App\Models\PublicationRecord;
@@ -274,6 +275,75 @@ class IngestTest extends TestCase
         $this->version('site', '22:50', $this->rows('03:00 – 04:00'), '22:47', null, '24 Листопада');
         $this->assertCount(2, $this->sent(1));
         $this->assertStringNotContainsString('уже', $this->sent(1)[1]);
+    }
+
+    public function test_full_cancellation_empties_the_schedule_once(): void
+    {
+        $this->version('telegram', '09:00', $this->rows('17:00 - 22:00'));
+        $this->publish('telegram', '10:50', 'За вказівкою НЕК “Укренерго” ГПВ на 23 листопада скасовано.');
+        $this->publish('site', '10:53', "ГПВ НА 23 ЛИСТОПАДА СКАСОВАНО (оновлено 10:49)\nГПВ на 23 листопада скасовано.");
+
+        $this->assertCount(2, $this->sent(1));
+        $this->assertStringContainsString("Скасували відключення:\n• з 17:00 до 22:00", $this->sent(1)[1]);
+        $this->assertStringContainsString('Відключень за графіком немає', $this->sent(1)[1]);
+        $this->assertSame([], Schedule::query()->first()->day()->intervals('5.2'));
+        $this->assertCount(0, $this->sent(999));
+    }
+
+    public function test_unclear_text_is_passed_on_from_the_site_and_keeps_the_schedule(): void
+    {
+        $this->version('site', '09:00', $this->rows('17:00 – 22:00'));
+        $text = 'ГПВ на 23 листопада скасовано з 15:00';
+        $this->publish('telegram', '10:50', $text);
+        $this->publish('site', '10:52', $text, 'n');
+        $this->publish('site', '10:52', $text.' !', 'n');
+        $this->publish('site', '06:00', $text, 'stale');
+
+        $this->assertCount(2, $this->sent(1));
+        $this->assertStringContainsString('Повідомлення про графік', $this->sent(1)[1]);
+        $this->assertStringContainsString('може бути неактуальним', $this->sent(1)[1]);
+        $this->assertSame(['17:00–22:00'], array_map('strval', Schedule::query()->first()->day()->intervals('5.2')));
+    }
+
+    public function test_removed_and_returned_outage_is_a_new_event_with_a_new_reminder(): void
+    {
+        foreach (['new posts' => [null, null, null], 'edits of one post' => ['x', 'x', 'x']] as $ids) {
+            Delivery::query()->delete();
+            Schedule::query()->delete();
+            PublicationRecord::query()->delete();
+            Chat::query()->where('telegram_id', 1)->update(['remind_minutes' => 60]);
+            $remind = fn () => app(Reminders::class)->queueDue();
+            $reminders = fn () => count(array_filter($this->sent(1), fn ($t) => str_contains($t, 'За графіком через')));
+
+            $this->atTime('16:30');
+            $this->version('site', '16:00', $this->rows('17:00 – 22:00'), null, $ids[0]);
+            $remind();
+            $remind();
+            $this->assertSame(1, $reminders());
+
+            $this->version('site', '16:10', '1.1: 07:00 – 12:00', null, $ids[1]);
+            $remind();
+            $this->assertSame(1, $reminders());
+            $this->assertSame(Delivery::EXPIRED, Delivery::query()->where('dedupe_key', 'like', 'remind:%')->sole()->status);
+
+            $this->version('site', '16:20', $this->rows('17:00 – 22:00'), null, $ids[2]);
+            $remind();
+            $remind();
+            $this->assertSame(2, $reminders());
+            $this->assertCount(5, $this->sent(1));
+        }
+    }
+
+    public function test_change_of_the_end_does_not_repeat_the_reminder(): void
+    {
+        Chat::query()->where('telegram_id', 1)->update(['remind_minutes' => 60]);
+        $this->atTime('16:30');
+        $this->version('site', '16:00', $this->rows('17:00 – 22:00'));
+        app(Reminders::class)->queueDue();
+        $this->version('site', '16:20', $this->rows('17:00 – 21:00'));
+        app(Reminders::class)->queueDue();
+
+        $this->assertCount(3, $this->sent(1));
     }
 
     public function test_first_run_on_real_data_is_silent_and_then_nothing_repeats(): void

@@ -73,13 +73,15 @@ final class Ingestor
 
     private function process(string $source, Publication $publication, bool $baseline): void
     {
-        $known = PublicationRecord::query()->where('source', $source)->where('external_id', $publication->externalId);
+        // Compared with the latest version only: returning to earlier content is a new event.
+        $latest = PublicationRecord::query()->where('source', $source)
+            ->where('external_id', $publication->externalId)->latest('id')->first();
 
-        if ((clone $known)->where('content_hash', $publication->hash())->exists()) {
+        if ($latest?->content_hash === $publication->hash()) {
             return;
         }
 
-        $edited = $known->exists();
+        $edited = $latest !== null;
         $kind = $this->parser->classify($publication->text);
 
         if ($kind === Kind::Other) {
@@ -101,7 +103,7 @@ final class Ingestor
         match ($kind) {
             Kind::Schedule => $this->schedule($record, $publication, $baseline),
             Kind::Emergency => $this->emergency($record, $publication, $baseline || $edited),
-            default => $this->unknown($record, $publication, $baseline),
+            default => $this->unknown($record, $publication, $baseline || $edited),
         };
     }
 
@@ -195,8 +197,7 @@ final class Ingestor
             return;
         }
 
-        $fresh = $publication->publishedAt->addMinutes((int) config('sources.emergency_max_age_minutes'))->isFuture();
-        $record->status = $silent || ! $fresh ? PublicationRecord::IGNORED : PublicationRecord::APPLIED;
+        $record->status = $silent || ! $this->isFresh($publication) ? PublicationRecord::IGNORED : PublicationRecord::APPLIED;
         $record->save();
 
         if ($record->status === PublicationRecord::APPLIED) {
@@ -204,14 +205,26 @@ final class Ingestor
         }
     }
 
-    private function unknown(PublicationRecord $record, Publication $publication, bool $baseline): void
+    /** The text is passed on as is; the stored schedule is not changed by a guess. */
+    private function unknown(PublicationRecord $record, Publication $publication, bool $silent): void
     {
         $record->status = PublicationRecord::REJECTED;
         $record->save();
 
-        if (! $baseline) {
-            $this->outbox->admin("unknown:{$record->id}", "Публікація про ГПВ без графіка: {$publication->title}\n{$publication->url}");
+        if ($silent) {
+            return;
         }
+
+        $this->outbox->admin("unknown:{$record->id}", "Публікація про ГПВ без графіка: {$publication->title}\n{$publication->url}");
+
+        if ($this->sources->provides($record->source, Kind::Unknown) && $this->isFresh($publication)) {
+            $this->outbox->notice($record->id, $publication->text, $record->source, $publication->url);
+        }
+    }
+
+    private function isFresh(Publication $publication): bool
+    {
+        return $publication->publishedAt->addMinutes((int) config('sources.emergency_max_age_minutes'))->isFuture();
     }
 
     /** One message per date, even if several versions were applied in this run. */

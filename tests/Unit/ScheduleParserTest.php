@@ -70,6 +70,37 @@ class ScheduleParserTest extends TestCase
         $this->assertSame(Kind::Other, $parser->classify('Електропостачання відновлено'));
     }
 
+    #[DataProvider('cancellations')]
+    public function test_only_a_clear_cancellation_of_a_whole_day_empties_the_schedule(string $text, bool $full): void
+    {
+        $parser = new ScheduleParser;
+        $this->assertSame($full ? Kind::Schedule : Kind::Unknown, $parser->classify($text));
+
+        if ($full) {
+            $parsed = $parser->parse($text, CarbonImmutable::parse('2026-11-23 08:00', 'UTC'));
+            $this->assertSame('2026-11-23', $parsed->date);
+            $this->assertSame((new DaySchedule([]))->hash(), $parsed->schedule->hash());
+        }
+    }
+
+    public static function cancellations(): array
+    {
+        return [
+            ["ГПВ НА 23 ЛИСТОПАДА СКАСОВАНО (оновлено 10:47)\nЗа вказівкою НЕК “Укренерго” ГПВ на 23 листопада скасовано.", true],
+            ['23 листопада по Запорізькій області ГПВ не застосовуватимуться.', true],
+            ['23 листопада ГПВ не будуть застосовані', true],
+            ['ГПВ скасовано', false],
+            ['ГПВ на 23 листопада не скасовано', false],
+            ['ГПВ на 23 листопада скасовано з 15:00', false],
+            ['ГПВ 23 листопада скасовано до 18 години', false],
+            ['ГПВ на 23 листопада скасовано для черги 5.2', false],
+            ['ГПВ на 23 листопада частково скасовано', false],
+            ['ГПВ на 23 листопада скасовано, на 24 листопада діють', false],
+            ['ГПВ на 23 листопада можливо буде скасовано', false],
+            ['23 листопада діятимуть ГПВ, графік буде пізніше', false],
+        ];
+    }
+
     public function test_interval_subtraction(): void
     {
         $diff = DaySchedule::subtract([new Interval(600, 900), new Interval(1000, 1100)], [new Interval(650, 700)]);

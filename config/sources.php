@@ -22,7 +22,7 @@ return [
     /* A delayed copy of an older version is recognized within this window. */
     'twin_window_minutes' => 30,
 
-    /* Emergency notices older than this are not sent. */
+    /* Emergency and other notices older than this are not sent. */
     'emergency_max_age_minutes' => 180,
 
     /* The admin is alerted after this many consecutive failed polls. */
@@ -30,7 +30,8 @@ return [
 
     /*
      * A source with a higher priority wins when sources disagree.
-     * "page" is the public link shown to users, "kinds" lists what is taken from the source.
+     * "page" is the public link shown to users, "kinds" lists what is taken from the source
+     * ("unknown" = texts about outages without a list, passed on to users as is).
      */
     'sources' => [
         'site' => [
@@ -41,7 +42,7 @@ return [
             'options' => ['url' => 'https://www.zoe.com.ua/feed/?post_type=outage_schedules'],
             'priority' => 100,
             'interval' => 60,
-            'kinds' => [Kind::Schedule->value, Kind::Emergency->value],
+            'kinds' => [Kind::Schedule->value, Kind::Emergency->value, Kind::Unknown->value],
         ],
         'telegram' => [
             'enabled' => true,

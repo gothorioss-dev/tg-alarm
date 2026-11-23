@@ -23,6 +23,9 @@ final class ScheduleParser
         if (preg_match('/\bСГАВ\b|спеціальн\w+ графік\w+ аварійних відключень/ui', $text)) {
             return Kind::Emergency;
         }
+        if ($hasGpv && $this->isFullCancellation($text)) {
+            return Kind::Schedule;
+        }
 
         return $hasGpv ? Kind::Unknown : Kind::Other;
     }
@@ -34,21 +37,15 @@ final class ScheduleParser
 
         return new ParsedSchedule(
             $this->parseDate($text, $local),
-            $this->parseQueues($text),
+            $this->isFullCancellation($text) ? new DaySchedule([]) : $this->parseQueues($text),
             $this->parseDeclaredAt($text, $local),
         );
     }
 
     private function parseDate(string $text, CarbonImmutable $local): string
     {
-        // Paragraphs after the list may mention other dates, so only the header is used.
-        $header = preg_split('/^\s*\d[.,]\d\b/mu', $text)[0];
-        preg_match_all('/(\d{1,2})\s+('.implode('|', array_keys(self::MONTHS)).')/ui', $header, $matches, PREG_SET_ORDER);
-        $dates = [];
+        $dates = $this->dates($text);
 
-        foreach ($matches as $match) {
-            $dates[(int) $match[1].'.'.self::MONTHS[mb_strtolower($match[2])]] = [(int) $match[1], self::MONTHS[mb_strtolower($match[2])]];
-        }
         if (count($dates) !== 1) {
             throw new ScheduleFormatException('Expected exactly one schedule date, found '.count($dates));
         }
@@ -68,6 +65,36 @@ final class ScheduleParser
         }
 
         throw new ScheduleFormatException("Schedule date {$day}.{$month} is too far from the publication date");
+    }
+
+    /** @return array<string, array{int, int}> distinct [day, month] pairs of the header */
+    private function dates(string $text): array
+    {
+        // Paragraphs after the list may mention other dates, so only the header is used.
+        $header = preg_split('/^\s*\d[.,]\d\b/mu', $text)[0];
+        preg_match_all('/(\d{1,2})\s+('.implode('|', array_keys(self::MONTHS)).')/ui', $header, $matches, PREG_SET_ORDER);
+        $dates = [];
+
+        foreach ($matches as $match) {
+            $month = self::MONTHS[mb_strtolower($match[2])];
+            $dates[(int) $match[1].'.'.$month] = [(int) $match[1], $month];
+        }
+
+        return $dates;
+    }
+
+    /**
+     * All outages of one whole day are called off. Anything partial, conditional or unclear
+     * is not a cancellation: a wrong guess would hide real outages.
+     */
+    private function isFullCancellation(string $text): bool
+    {
+        $text = preg_replace('/\(\s*оновлено[^)]*\)/ui', '', $text);
+
+        return count($this->dates($text)) === 1
+            && preg_match('/скасован|\bне\s+(?:будуть\s+)?(?:застосов|діятимуть)/ui', $text)
+            && ! preg_match('/\bне\s+скасован|черг|частков|окрім|крім|деяк|тимчасов|продовж|залиша|перен[оі]с|можлив|якщо/ui', $text)
+            && ! preg_match('/\d{1,2}\s*[:–-]\s*\d{2}|\b(?:з|із|до|після|від|о|об)\s+\d/ui', $text);
     }
 
     private function parseQueues(string $text): DaySchedule
