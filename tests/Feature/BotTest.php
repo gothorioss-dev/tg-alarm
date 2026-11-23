@@ -123,18 +123,39 @@ class BotTest extends TestCase
         $this->assertStringNotContainsString('t.me', $messages->guide());
     }
 
-    public function test_schedule_has_no_inline_buttons_and_a_single_screen_is_kept(): void
+    private function assertDeleted(int $id, bool $deleted = true): void
     {
-        $this->fake();
+        $check = fn ($r) => str_ends_with($r->url(), 'deleteMessage') && $r['message_id'] === $id;
+        $deleted ? Http::assertSent($check) : Http::assertNotSent($check);
+    }
+
+    public function test_schedule_stays_and_service_screens_are_replaced(): void
+    {
+        $next = 60;
+        Http::fake(function ($r) use (&$next) {
+            return Http::response(['ok' => true, 'result' => str_ends_with($r->url(), 'sendMessage') ? ['message_id' => $next++] : true]);
+        });
         $chat = Chat::query()->create(['telegram_id' => 5, 'type' => 'private', 'menu_message_id' => 40]);
         $chat->subscriptions()->create(['queue' => '1.1']);
-        $this->update($this->message(Keyboards::SCHEDULE));
 
-        $this->assertSame(60, $chat->refresh()->menu_message_id);
-        foreach ([40, 50] as $id) {
-            Http::assertSent(fn ($r) => str_ends_with($r->url(), 'deleteMessage') && $r['message_id'] === $id);
-        }
-        Http::assertSent(fn ($r) => str_ends_with($r->url(), 'sendMessage') && ! isset($r['reply_markup']));
+        $this->update($this->message(Keyboards::SCHEDULE)); // 60
+        $this->assertNull($chat->refresh()->menu_message_id);
+        $this->update($this->message(Keyboards::SETTINGS)); // 61
+        $this->update($this->message(Keyboards::QUEUES)); // 62
+
+        $this->assertDeleted(40);
+        $this->assertDeleted(50);
+        $this->assertDeleted(60, false);
+        $this->assertDeleted(61);
+
+        // The selection screen becomes a schedule and is kept too.
+        $query = $this->press('done');
+        $query['callback_query']['message']['message_id'] = 62;
+        $this->update($query);
+        $this->update($this->message(Keyboards::GUIDE)); // 63
+        $this->assertDeleted(62, false);
+        $this->assertSame(63, $chat->refresh()->menu_message_id);
+
         Http::assertNotSent(fn ($r) => isset($r['reply_markup']['keyboard']));
     }
 

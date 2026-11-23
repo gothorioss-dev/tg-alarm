@@ -106,6 +106,11 @@ final class UpdateHandler
 
         if (in_array($data, ['schedule', 'queue', 'settings', 'help'], true)) {
             $this->show($chat, $data, $messageId);
+
+            // The service screen has turned into a schedule, which must stay.
+            if ($data === 'schedule' && $chat->menu_message_id === $messageId && $chat->subscriptions()->exists()) {
+                $chat->update(['menu_message_id' => null]);
+            }
         }
     }
 
@@ -129,11 +134,17 @@ final class UpdateHandler
         $this->open($chat, 'queue');
     }
 
-    /** Keeps a single screen in the chat, always at the bottom. */
+    /** Replaces the previous service screen; schedules stay in the chat. */
     private function open(Chat $chat, string $screen): void
     {
+        // Without queues the selection is shown instead of the schedule.
+        if ($screen === 'schedule' && ! $chat->subscriptions()->exists()) {
+            $screen = 'queue';
+        }
+
         $previous = $chat->menu_message_id;
-        $chat->update(['menu_message_id' => $this->show($chat, $screen)]);
+        $shown = $this->show($chat, $screen);
+        $chat->update(['menu_message_id' => $screen === 'schedule' ? null : $shown]);
 
         if ($previous !== null) {
             $this->delete($chat, $previous);

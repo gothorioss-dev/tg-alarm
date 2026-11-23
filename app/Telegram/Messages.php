@@ -86,7 +86,7 @@ final class Messages
             }
         }
         if ($checkedAt !== null) {
-            $parts[] = '<i>Дані перевірено о '.CarbonImmutable::parse($checkedAt, 'UTC')->setTimezone(config('telegram.timezone'))->format('H:i, d.m').'</i>';
+            $parts[] = '<i>Дані на '.CarbonImmutable::parse($checkedAt, 'UTC')->setTimezone(config('telegram.timezone'))->format('H:i, d.m').'</i>';
         }
         if (! $active) {
             $parts[] = '🔕 Сповіщення вимкнено.';
