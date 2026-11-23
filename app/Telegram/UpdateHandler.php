@@ -48,7 +48,7 @@ final class UpdateHandler
             if ($text === '') {
                 return;
             }
-            // The first message of a new user leads to the manual.
+            // The first message of a new user leads to the guide.
             $action = $this->hasQueues((int) $chat['id']) ? 'menu' : 'start';
         }
 
@@ -143,9 +143,9 @@ final class UpdateHandler
             'stop' => $this->setActive($chatId, $type, false, $messageId),
             'enable' => $this->setActive($chatId, $type, true, $messageId),
             'menu' => $this->showMenu($chatId, $type, $messageId),
-            'help' => $this->render($chatId, $this->messages->manual(), Keyboards::manual($this->hasQueues($chatId)), $messageId),
+            // 'buttons' is kept for messages sent before the screens were merged.
+            'help', 'buttons' => $this->render($chatId, $this->messages->guide(), Keyboards::guide($this->hasQueues($chatId)), $messageId),
             'sources' => $this->render($chatId, $this->messages->sources(), Keyboards::back(), $messageId),
-            'buttons' => $this->render($chatId, $this->messages->buttons(), Keyboards::manual($this->hasQueues($chatId)), $messageId),
             'settings' => $this->showSettings($chatId, $type, $messageId),
             'remind' => $this->showReminders($chatId, $type, $messageId),
         };

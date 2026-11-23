@@ -18,8 +18,7 @@ final class Keyboards
             [self::inline('📅 Графік', 'schedule')],
             [self::inline('⚡ Змінити / додати чергу', 'queue')],
             [self::inline('⚙️ Налаштування', 'settings')],
-            [self::inline('📘 Інструкція', 'help'), self::inline('📖 Довідник кнопок', 'buttons')],
-            [self::inline('🔗 Джерела', 'sources')],
+            [self::inline('📖 Довідник', 'help'), self::inline('🔗 Джерела', 'sources')],
         ]];
     }
 
@@ -52,11 +51,10 @@ final class Keyboards
     }
 
     /** @return array<string, mixed> */
-    public static function manual(bool $hasQueues): array
+    public static function guide(bool $hasQueues): array
     {
         return $hasQueues ? self::back() : ['inline_keyboard' => [
             [self::inline('⚡ Обрати чергу', 'queue')],
-            [self::inline('📖 Довідник кнопок', 'buttons')],
         ]];
     }
 

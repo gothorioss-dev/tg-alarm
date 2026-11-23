@@ -125,12 +125,12 @@ class BotTest extends TestCase
         $this->assertSame(0, Chat::query()->count());
     }
 
-    public function test_sources_screen_and_manual_link_to_enabled_sources(): void
+    public function test_sources_screen_and_guide_link_to_enabled_sources(): void
     {
         config(['sources.sources.telegram.priority' => 200]);
         $messages = app(Messages::class);
 
-        foreach ([$messages->sources(), $messages->manual()] as $text) {
+        foreach ([$messages->sources(), $messages->guide()] as $text) {
             $this->assertStringContainsString('<a href="https://www.zoe.com.ua/outage/">', $text);
             $this->assertStringContainsString('<a href="https://t.me/zoe_alarm">', $text);
             $this->assertStringNotContainsString('груп', $text);

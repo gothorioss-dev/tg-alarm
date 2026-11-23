@@ -116,7 +116,7 @@ class ReminderTest extends TestCase
         $this->assertStringContainsString('зараз відключення до 22:00', $this->press('schedule'));
     }
 
-    public function test_first_start_shows_manual_then_menu(): void
+    public function test_first_start_shows_guide_then_menu(): void
     {
         $texts = [];
         Http::fake(function ($r) use (&$texts) {
@@ -127,7 +127,7 @@ class ReminderTest extends TestCase
         $start = fn (int $id) => app(UpdateHandler::class)->handle(['message' => ['text' => '/start', 'chat' => ['id' => $id, 'type' => 'private'], 'from' => ['id' => $id]]], 'bot');
         $start(77);
         $start(5);
-        $this->assertStringContainsString('Як користуватися', $texts[0]);
+        $this->assertStringContainsString('Як почати', $texts[0]);
         $this->assertStringContainsString('Меню', $texts[1]);
     }
 }
