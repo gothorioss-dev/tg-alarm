@@ -14,6 +14,8 @@ final class UpdateHandler
 
     private const LEGACY_NEW_PREFIX = 'new:';
 
+    private ?string $botLink = null;
+
     public function __construct(private TelegramClient $telegram, private Messages $messages) {}
 
     /** @param array<string, mixed> $update */
@@ -51,7 +53,7 @@ final class UpdateHandler
 
             return;
         }
-        if ($text === '/start') {
+        if (preg_match('/^\/start(\s|$)/', $text)) {
             $chat->update(['active' => true]);
         }
 
@@ -146,7 +148,15 @@ final class UpdateHandler
             'queue' => $this->showQueues($chat, $messageId),
             'settings' => $this->render($chat, $this->messages->settings($chat->active, $chat->remind_minutes), Keyboards::settings($chat), $messageId),
             'help' => $this->render($chat, $this->messages->guide(), null, $messageId),
+            'invite' => $this->showInvite($chat, $messageId),
         };
+    }
+
+    private function showInvite(Chat $chat, ?int $messageId = null): int
+    {
+        $this->botLink ??= 'https://t.me/'.$this->telegram->call('getMe')['username'];
+
+        return $this->render($chat, $this->messages->invite($this->botLink), Keyboards::invite($this->botLink, $this->messages->inviteText()), $messageId);
     }
 
     private function showSchedule(Chat $chat, ?int $messageId = null): int

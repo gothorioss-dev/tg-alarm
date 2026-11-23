@@ -21,7 +21,7 @@ class BotTest extends TestCase
 
     private function fake(): void
     {
-        Http::fake(fn () => Http::response(['ok' => true, 'result' => ['message_id' => 60]]));
+        Http::fake(fn () => Http::response(['ok' => true, 'result' => ['message_id' => 60, 'username' => 'zoe_bot']]));
     }
 
     private function update(array $update): void
@@ -167,6 +167,39 @@ class BotTest extends TestCase
         Http::assertSent(fn ($r) => $this->hasButton($r, 'r:30'));
         Http::assertSent(fn ($r) => str_contains($r['text'] ?? '', 'Довідник'));
         Http::assertNotSent(fn ($r) => isset($r['reply_markup']['keyboard']));
+    }
+
+    public function test_invite_shares_the_bot_link_with_a_ready_text(): void
+    {
+        Http::fake(fn () => Http::response(['ok' => true, 'result' => ['message_id' => 60, 'username' => 'zoe_bot']]));
+        Chat::query()->create(['telegram_id' => 5, 'type' => 'private'])->subscriptions()->create(['queue' => '1.1']);
+        $this->update($this->message(Keyboards::INVITE));
+
+        Http::assertSent(function ($r) {
+            $url = $r['reply_markup']['inline_keyboard'][0][0]['url'] ?? '';
+            parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+
+            return str_starts_with($url, 'https://t.me/share/url?')
+                && $query['url'] === 'https://t.me/zoe_bot'
+                && $query['text'] === app(Messages::class)->inviteText();
+        });
+    }
+
+    public function test_start_with_a_parameter_turns_notifications_back_on(): void
+    {
+        $this->fake();
+        $chat = Chat::query()->create(['telegram_id' => 5, 'type' => 'private', 'active' => false]);
+        $chat->subscriptions()->create(['queue' => '1.1']);
+        $this->update($this->message('/start abc'));
+
+        $this->assertTrue($chat->refresh()->active);
+    }
+
+    public function test_descriptions_fit_telegram_limits(): void
+    {
+        $messages = app(Messages::class);
+        $this->assertLessThanOrEqual(512, mb_strlen($messages->description()));
+        $this->assertLessThanOrEqual(120, mb_strlen($messages->shortDescription()));
     }
 
     private function delivery(): Delivery

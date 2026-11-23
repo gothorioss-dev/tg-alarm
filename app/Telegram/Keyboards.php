@@ -16,6 +16,8 @@ final class Keyboards
 
     public const GUIDE = '📖 Довідник';
 
+    public const INVITE = '👥 Запросити';
+
     /**
      * Main menu. A message carries either this or inline buttons.
      *
@@ -27,6 +29,7 @@ final class Keyboards
             'keyboard' => [
                 [['text' => self::SCHEDULE], ['text' => self::QUEUES]],
                 [['text' => self::SETTINGS], ['text' => self::GUIDE]],
+                [['text' => self::INVITE]],
             ],
             'resize_keyboard' => true,
         ];
@@ -43,6 +46,7 @@ final class Keyboards
             $plain(self::QUEUES) => 'queue',
             $plain(self::SETTINGS) => 'settings',
             $plain(self::GUIDE) => 'help',
+            $plain(self::INVITE) => 'invite',
             default => null,
         };
     }
@@ -75,6 +79,18 @@ final class Keyboards
         );
 
         return ['inline_keyboard' => [...array_chunk($buttons, 4), [self::inline('💾 Готово', 'done')]]];
+    }
+
+    /**
+     * Opens the Telegram chat picker with a ready message.
+     *
+     * @return array<string, mixed>
+     */
+    public static function invite(string $link, string $text): array
+    {
+        $url = 'https://t.me/share/url?url='.rawurlencode($link).'&text='.rawurlencode($text);
+
+        return ['inline_keyboard' => [[['text' => '📨 Надіслати запрошення', 'url' => $url]]]];
     }
 
     /** @return array{text: string, callback_data: string} */

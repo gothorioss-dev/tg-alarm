@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Telegram\Messages;
 use App\Telegram\TelegramClient;
 use App\Telegram\TelegramException;
 use App\Telegram\UpdateHandler;
@@ -16,7 +17,7 @@ class Bot extends Command
 
     protected $description = 'Handle Telegram updates via long polling';
 
-    public function handle(TelegramClient $telegram, UpdateHandler $handler): int
+    public function handle(TelegramClient $telegram, UpdateHandler $handler, Messages $messages): int
     {
         $running = true;
         $this->trap([SIGTERM, SIGINT], function () use (&$running) {
@@ -35,6 +36,7 @@ class Bot extends Command
             return self::FAILURE;
         }
 
+        $this->describe($telegram, $messages);
         $offset = 0;
         // Docker restarts the process, which keeps memory bounded.
         $until = time() + 6 * 3600;
@@ -71,5 +73,24 @@ class Bot extends Command
         }
 
         return self::SUCCESS;
+    }
+
+    /** Texts shown before the start; they are updated only when changed and are not critical. */
+    private function describe(TelegramClient $telegram, Messages $messages): void
+    {
+        $texts = [
+            'MyDescription' => ['description', $messages->description()],
+            'MyShortDescription' => ['short_description', $messages->shortDescription()],
+        ];
+
+        foreach ($texts as $method => [$field, $text]) {
+            try {
+                if (($telegram->call("get{$method}")[$field] ?? '') !== $text) {
+                    $telegram->call("set{$method}", [$field => $text]);
+                }
+            } catch (TelegramException $e) {
+                Log::warning("set{$method} failed: {$e->getMessage()}");
+            }
+        }
     }
 }
