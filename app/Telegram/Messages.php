@@ -126,6 +126,11 @@ final class Messages
             .'Сповіщення: '.($active ? '🔔 увімкнено' : '🔕 вимкнено');
     }
 
+    public function scheduleShown(): string
+    {
+        return 'Показано актуальний графік';
+    }
+
     /** @param list<Interval> $intervals */
     private function intervals(array $intervals): string
     {

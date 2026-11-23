@@ -90,7 +90,8 @@ final class UpdateHandler
             return;
         }
         if (in_array($data, self::ACTIONS, true)) {
-            $this->answer($query['id']);
+            // Refreshing an unchanged schedule is otherwise invisible.
+            $this->answer($query['id'], $data === 'schedule' && ! $newMessage ? $this->messages->scheduleShown() : null);
             $this->run($data, $chatId, $chat['type'], $newMessage ? null : (int) $query['message']['message_id']);
 
             return;
