@@ -3,15 +3,16 @@
 namespace App\Telegram;
 
 use App\Models\Chat;
-use App\Models\Schedule;
+use App\Models\SourceState;
+use App\Schedule\OutageTimeline;
 use App\Schedule\Queues;
 
 final class UpdateHandler
 {
     /** Actions that only show information and are open to every group member. */
-    private const PUBLIC_ACTIONS = ['schedule', 'help', 'menu'];
+    private const PUBLIC_ACTIONS = ['schedule', 'help', 'menu', 'buttons'];
 
-    private const ACTIONS = ['start', 'queue', 'schedule', 'stop', 'enable', 'help', 'menu'];
+    private const ACTIONS = ['start', 'queue', 'schedule', 'stop', 'enable', 'help', 'menu', 'buttons', 'settings', 'remind'];
 
     public function __construct(private TelegramClient $telegram, private Messages $messages) {}
 
@@ -52,7 +53,8 @@ final class UpdateHandler
             if (! $private || $text === '') {
                 return;
             }
-            $action = 'menu';
+            // The first message of a new user leads to the manual.
+            $action = $this->hasQueues((int) $chat['id']) ? 'menu' : 'start';
         }
 
         if (! in_array($action, self::PUBLIC_ACTIONS, true)
@@ -93,6 +95,12 @@ final class UpdateHandler
             // Refreshing an unchanged schedule is otherwise invisible.
             $this->answer($query['id'], $data === 'schedule' && ! $newMessage ? $this->messages->scheduleShown() : null);
             $this->run($data, $chatId, $chat['type'], $newMessage ? null : (int) $query['message']['message_id']);
+
+            return;
+        }
+
+        if (str_starts_with($data, 'r:')) {
+            $this->setReminder($query, $chatId, $chat['type'], (int) substr($data, 2));
 
             return;
         }
@@ -153,7 +161,10 @@ final class UpdateHandler
             'stop' => $this->setActive($chatId, $type, false, $messageId),
             'enable' => $this->setActive($chatId, $type, true, $messageId),
             'menu' => $this->showMenu($chatId, $type, $messageId),
-            'help' => $this->render($chatId, $this->messages->help(), Keyboards::back(), $messageId),
+            'help' => $this->render($chatId, $this->messages->manual(), Keyboards::manual($this->hasQueues($chatId)), $messageId),
+            'buttons' => $this->render($chatId, $this->messages->buttons(), Keyboards::manual($this->hasQueues($chatId)), $messageId),
+            'settings' => $this->showSettings($chatId, $type, $messageId),
+            'remind' => $this->showReminders($chatId, $type, $messageId),
         };
     }
 
@@ -162,14 +173,16 @@ final class UpdateHandler
         $chat = $this->chat($chatId, $type);
         $chat->update(['active' => true]);
 
-        $chat->subscriptions()->exists() ? $this->showMenu($chatId, $type) : $this->showQueues($chatId, $type);
+        $chat->subscriptions()->exists()
+            ? $this->showMenu($chatId, $type)
+            : $this->run('help', $chatId, $type);
     }
 
     private function showMenu(int $chatId, string $type, ?int $messageId = null): void
     {
         $chat = $this->chat($chatId, $type);
-        $text = $this->messages->menu($chat->subscriptions->pluck('queue')->all(), $chat->active);
-        $this->render($chatId, $text, Keyboards::menu($chat), $messageId);
+        $text = $this->messages->menu($chat->subscriptions->pluck('queue')->all(), $chat->active, $chat->remind_minutes);
+        $this->render($chatId, $text, Keyboards::menu(), $messageId);
     }
 
     private function showQueues(int $chatId, string $type, ?int $messageId = null): void
@@ -181,17 +194,14 @@ final class UpdateHandler
     {
         $chat = $this->chat($chatId, $type);
         $queues = $chat->subscriptions->pluck('queue')->all();
-        $today = now(config('telegram.timezone'));
-        $days = Schedule::query()->whereBetween('date', [$today->format('Y-m-d'), $today->addDay()->format('Y-m-d')])
-            ->orderBy('date')->get()->mapWithKeys(fn (Schedule $s) => [$s->date => $s->day()])->all();
-
-        $this->render($chatId, $this->messages->currentSchedule($days, $queues, $chat->active), Keyboards::schedule(), $messageId);
+        $checkedAt = SourceState::query()->max('succeeded_at');
+        $this->render($chatId, $this->messages->currentSchedule(OutageTimeline::load(), $queues, $chat->active, $checkedAt), Keyboards::schedule(), $messageId);
     }
 
     private function setActive(int $chatId, string $type, bool $active, ?int $messageId): void
     {
         $this->chat($chatId, $type)->update(['active' => $active]);
-        $this->showMenu($chatId, $type, $messageId);
+        $this->showSettings($chatId, $type, $messageId);
     }
 
     /** @param array<string, mixed> $keyboard */
@@ -253,5 +263,38 @@ final class UpdateHandler
         } catch (TelegramException) {
             // The query may have expired; the action itself still matters.
         }
+    }
+
+    private function hasQueues(int $chatId): bool
+    {
+        return Chat::query()->where('telegram_id', $chatId)->whereHas('subscriptions')->exists();
+    }
+
+    private function showSettings(int $chatId, string $type, ?int $messageId = null): void
+    {
+        $chat = $this->chat($chatId, $type);
+        $keyboard = Keyboards::settings($chat, $this->messages->reminderLabel($chat->remind_minutes));
+        $this->render($chatId, $this->messages->settings($chat->active, $chat->remind_minutes), $keyboard, $messageId);
+    }
+
+    private function showReminders(int $chatId, string $type, ?int $messageId = null): void
+    {
+        $chat = $this->chat($chatId, $type);
+        $this->render($chatId, $this->messages->reminderSettings($chat->active), Keyboards::reminders($chat), $messageId);
+    }
+
+    /** @param array<string, mixed> $query */
+    private function setReminder(array $query, int $chatId, string $type, int $minutes): void
+    {
+        if ($minutes !== 0 && ! in_array($minutes, config('telegram.remind_minutes'), true)) {
+            $this->answer($query['id']);
+
+            return;
+        }
+
+        $chat = $this->chat($chatId, $type);
+        $chat->update(['remind_minutes' => $minutes ?: null]);
+        $this->answer($query['id'], 'Нагадування: '.$this->messages->reminderLabel($chat->remind_minutes));
+        $this->showReminders($chatId, $type, (int) $query['message']['message_id']);
     }
 }

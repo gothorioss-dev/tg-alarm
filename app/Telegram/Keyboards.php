@@ -12,15 +12,50 @@ final class Keyboards
     public const NEW_PREFIX = 'new:';
 
     /** @return array<string, mixed> */
-    public static function menu(Chat $chat): array
+    public static function menu(): array
     {
         return ['inline_keyboard' => [
             [self::inline('📅 Графік', 'schedule')],
-            [self::inline('⚙️ Змінити / додати чергу', 'queue')],
+            [self::inline('⚡ Змінити / додати чергу', 'queue')],
+            [self::inline('⚙️ Налаштування', 'settings')],
+            [self::inline('📘 Інструкція', 'help'), self::inline('📖 Довідник кнопок', 'buttons')],
+        ]];
+    }
+
+    /** @return array<string, mixed> */
+    public static function settings(Chat $chat, string $reminderLabel): array
+    {
+        return ['inline_keyboard' => [
             [$chat->active
                 ? self::inline('🔕 Вимкнути сповіщення', 'stop')
                 : self::inline('🔔 Увімкнути сповіщення', 'enable')],
-            [self::inline('ℹ️ Допомога', 'help')],
+            [self::inline("⏰ Нагадування: {$reminderLabel}", 'remind')],
+            [self::inline('☰ Меню', 'menu')],
+        ]];
+    }
+
+    /** @return array<string, mixed> */
+    public static function reminders(Chat $chat): array
+    {
+        $mark = fn (bool $selected) => $selected ? '✅ ' : '';
+        $buttons = array_map(
+            fn (int $m) => self::inline($mark($chat->remind_minutes === $m)."за {$m} хв", "r:{$m}"),
+            config('telegram.remind_minutes'),
+        );
+
+        return ['inline_keyboard' => [
+            ...array_chunk($buttons, 2),
+            [self::inline($mark($chat->remind_minutes === null).'Не нагадувати', 'r:0')],
+            [self::inline('⬅️ Налаштування', 'settings')],
+        ]];
+    }
+
+    /** @return array<string, mixed> */
+    public static function manual(bool $hasQueues): array
+    {
+        return $hasQueues ? self::back() : ['inline_keyboard' => [
+            [self::inline('⚡ Обрати чергу', 'queue')],
+            [self::inline('📖 Довідник кнопок', 'buttons')],
         ]];
     }
 

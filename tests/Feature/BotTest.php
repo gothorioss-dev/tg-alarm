@@ -43,6 +43,7 @@ class BotTest extends TestCase
     {
         $this->fake();
         $this->update($this->message('/start'));
+        $this->update($this->press('queue'));
         Http::assertSent(fn ($r) => str_contains($r['text'] ?? '', '<a href="https://www.zoe.com.ua/outage/">'));
         foreach (['q:1.1', 'q:5.2', 'q:1.1', 'q:6.1', 'q:9.9'] as $data) {
             $this->update($this->press($data));
@@ -114,6 +115,7 @@ class BotTest extends TestCase
     public function test_any_private_text_opens_menu_and_notification_button_sends_new_message(): void
     {
         $this->fake();
+        Chat::query()->create(['telegram_id' => 5, 'type' => 'private'])->subscriptions()->create(['queue' => '1.1']);
         $this->update($this->message('привіт'));
         Http::assertSent(fn ($r) => str_ends_with($r->url(), 'sendMessage') && $this->hasButton($r, 'queue'));
 

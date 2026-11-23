@@ -5,6 +5,7 @@ namespace App\Ingest;
 use App\Models\Chat;
 use App\Models\Delivery;
 use App\Schedule\DaySchedule;
+use App\Schedule\Outage;
 use App\Telegram\Messages;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Log;
@@ -53,6 +54,16 @@ final class Outbox
         if ($adminId = (int) config('telegram.admin_id')) {
             $this->push($adminId, "admin:{$key}", '🛠 '.e(mb_strimwidth($text, 0, 3000, '…')));
         }
+    }
+
+    public function reminder(Chat $chat, string $queue, Outage $outage, CarbonImmutable $now): void
+    {
+        $this->push(
+            $chat->telegram_id,
+            "remind:{$chat->id}:{$queue}:{$outage->start->timestamp}",
+            $this->messages->reminder($queue, $outage, $now),
+            $outage->start->utc(),
+        );
     }
 
     private function eachChat(callable $callback): void

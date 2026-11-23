@@ -9,7 +9,7 @@ class Chat extends Model
 {
     protected $guarded = [];
 
-    protected $casts = ['active' => 'boolean', 'telegram_id' => 'integer'];
+    protected $casts = ['active' => 'boolean', 'telegram_id' => 'integer', 'remind_minutes' => 'integer'];
 
     /** @return HasMany<Subscription, $this> */
     public function subscriptions(): HasMany

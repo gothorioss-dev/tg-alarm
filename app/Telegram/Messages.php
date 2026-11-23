@@ -4,6 +4,8 @@ namespace App\Telegram;
 
 use App\Schedule\DaySchedule;
 use App\Schedule\Interval;
+use App\Schedule\Outage;
+use App\Schedule\OutageTimeline;
 use App\Sources\SourceRegistry;
 use Carbon\CarbonImmutable;
 
@@ -48,30 +50,31 @@ final class Messages
         return '🚨 <b>'.e(mb_strimwidth($text, 0, 3000, '…')).'</b>'.$this->footer($source, $url);
     }
 
-    /**
-     * @param  array<string, DaySchedule>  $days
-     * @param  list<string>  $queues
-     */
-    public function currentSchedule(array $days, array $queues, bool $active = true): string
+    /** @param list<string> $queues */
+    public function currentSchedule(OutageTimeline $timeline, array $queues, bool $active = true, ?string $checkedAt = null): string
     {
         if ($queues === []) {
             return 'Черги ще не обрано. Оберіть їх у меню.';
         }
 
-        $note = $active ? '' : "\n\n🔕 Сповіщення вимкнено.";
+        $footer = $checkedAt === null ? '' : "\n\n<i>Дані перевірено о ".CarbonImmutable::parse($checkedAt, 'UTC')->setTimezone(config('telegram.timezone'))->format('H:i, d.m').'</i>';
+        $footer .= $active ? '' : "\n🔕 Сповіщення вимкнено.";
 
-        if ($days === []) {
-            return 'Графіків на сьогодні та завтра поки немає.'.($active ? ' Коли їх опублікують, я повідомлю.' : $note);
+        if ($timeline->days() === []) {
+            return 'Графіків на сьогодні та завтра поки немає.'.($active ? ' Коли їх опублікують, я повідомлю.' : '').$footer;
         }
 
         $parts = [];
 
-        foreach ($days as $date => $day) {
+        if ($timeline->knowsToday()) {
+            $parts[] = implode("\n", array_map(fn (string $q) => $this->status($q, $timeline), $queues));
+        }
+        foreach ($timeline->days() as $date => $day) {
             $parts[] = "📅 <b>{$this->date($date)}</b>\n"
                 .implode("\n", array_map(fn (string $q) => $this->queue($q, $day), $queues));
         }
 
-        return implode("\n\n", $parts).$note;
+        return implode("\n\n", $parts).$footer;
     }
 
     public function queue(string $queue, DaySchedule $day): string
@@ -87,13 +90,29 @@ final class Messages
             .'Свою чергу можна дізнатися <a href="'.e(config('telegram.queue_lookup_url')).'">на сайті Запоріжжяобленерго</a>.';
     }
 
-    public function help(): string
+    public function manual(): string
     {
-        return "Повідомляю про графіки відключень і зміни в них для обраних черг. Користуйтеся кнопками:\n\n"
-            ."📅 <b>Графік</b> — на сьогодні та завтра\n"
-            ."⚙️ <b>Змінити / додати чергу</b> — одну або кілька\n"
-            ."🔕 / 🔔 — вимкнути або увімкнути сповіщення\n\n"
-            .'У групі налаштування змінюють адміністратори.';
+        return "📘 <b>Як користуватися ботом</b>\n\n"
+            ."1. Натисніть «⚡ Обрати чергу» й позначте одну або кілька черг.\n"
+            ."2. Натисніть «💾 Готово» — побачите, чи є зараз світло за графіком, і найближчі відключення.\n"
+            ."3. Далі я сам повідомлятиму про новий графік, зміни для ваших черг та аварійні відключення.\n"
+            ."4. Нагадування перед відключенням: «⚙️ Налаштування» → «⏰ Нагадування».\n\n"
+            ."Меню відкриває синя кнопка біля поля введення.\n"
+            .'Це неофіційний бот: дані беруться з сайту Запоріжжяобленерго та каналу ZOE_Alarm, фактичні відключення можуть відрізнятися. У групі налаштування змінюють адміністратори.';
+    }
+
+    public function buttons(): string
+    {
+        return "📖 <b>Довідник кнопок</b>\n\n"
+            ."📅 <b>Графік</b> — стан зараз і відключення на сьогодні та завтра\n"
+            ."🔄 <b>Оновити</b> — показати найсвіжіші дані\n"
+            ."⚡ <b>Змінити / додати чергу</b> — позначити свої черги; повторне натискання прибирає чергу\n"
+            ."💾 <b>Готово</b> — завершити вибір і показати графік\n"
+            ."⚙️ <b>Налаштування</b> — сповіщення та нагадування\n"
+            ."🔕 / 🔔 — вимкнути або увімкнути всі повідомлення; черги зберігаються\n"
+            ."⏰ <b>Нагадування</b> — за скільки хвилин попереджати про відключення\n"
+            ."📘 <b>Інструкція</b> — як користуватися ботом\n"
+            .'☰ <b>Меню</b> — повернутися до головного меню';
     }
 
     public function adminsOnly(): string
@@ -119,16 +138,82 @@ final class Messages
     }
 
     /** @param list<string> $queues */
-    public function menu(array $queues, bool $active): string
+    public function menu(array $queues, bool $active, ?int $remindMinutes): string
     {
         return "☰ <b>Меню</b>\n\n"
             .'Черги: '.($queues === [] ? 'не обрано' : '<b>'.implode(', ', $queues).'</b>')."\n"
-            .'Сповіщення: '.($active ? '🔔 увімкнено' : '🔕 вимкнено');
+            .'Сповіщення: '.($active ? '🔔 увімкнено' : '🔕 вимкнено')."\n"
+            .'Нагадування: '.$this->reminderLabel($remindMinutes);
     }
 
     public function scheduleShown(): string
     {
         return 'Показано актуальний графік';
+    }
+
+    public function settings(bool $active, ?int $remindMinutes): string
+    {
+        return "⚙️ <b>Налаштування</b>\n\n"
+            .'Сповіщення: '.($active ? '🔔 увімкнено' : '🔕 вимкнено')."\n"
+            .'Нагадування: '.$this->reminderLabel($remindMinutes)
+            .($active ? '' : "\n\nПоки сповіщення вимкнено, нагадування теж не надходять.");
+    }
+
+    public function reminderSettings(bool $active): string
+    {
+        return "⏰ <b>Нагадування перед відключенням</b>\n\nЗа скільки хвилин попереджати?"
+            .($active ? '' : "\n\n🔕 Сповіщення вимкнено: увімкніть їх у налаштуваннях, щоб отримувати нагадування.");
+    }
+
+    public function reminderLabel(?int $minutes): string
+    {
+        return $minutes === null ? 'вимкнено' : "за {$minutes} хв";
+    }
+
+    public function reminder(string $queue, Outage $outage, CarbonImmutable $now): string
+    {
+        return "⏰ <b>Черга {$queue}: відключення через {$this->duration($now, $outage->start)}</b>\n"
+            ."З {$outage->start->format('H:i')} до {$this->endTime($outage->end, $outage->start)} за графіком.";
+    }
+
+    private function status(string $queue, OutageTimeline $timeline): string
+    {
+        $now = $timeline->now();
+
+        if ($current = $timeline->current($queue)) {
+            return "🔴 <b>{$queue}:</b> зараз відключення до {$this->endTime($current->end, $now)}";
+        }
+
+        $text = "🟢 <b>{$queue}:</b> зараз за графіком світло є";
+
+        if ($next = $timeline->next($queue)) {
+            $day = $next->start->isSameDay($now) ? '' : $this->date($next->start->format('Y-m-d')).' ';
+            $text .= "\nНаступне відключення: {$day}о {$next->start->format('H:i')} (через {$this->duration($now, $next->start)})";
+        }
+
+        return $text;
+    }
+
+    /** Midnight right after the reference day is shown as 24:00, as in the source. */
+    private function endTime(CarbonImmutable $end, CarbonImmutable $reference): string
+    {
+        if ($end->isSameDay($reference)) {
+            return $end->format('H:i');
+        }
+        if ($end->equalTo($reference->addDay()->startOfDay())) {
+            return '24:00';
+        }
+
+        return $end->format('H:i').' ('.$this->date($end->format('Y-m-d')).')';
+    }
+
+    private function duration(CarbonImmutable $from, CarbonImmutable $to): string
+    {
+        $minutes = max(1, (int) ceil($from->diffInSeconds($to) / 60));
+        $hours = intdiv($minutes, 60);
+        $rest = $minutes % 60;
+
+        return trim(($hours ? "{$hours} год " : '').($rest ? "{$rest} хв" : ''));
     }
 
     /** @param list<Interval> $intervals */
