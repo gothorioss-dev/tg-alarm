@@ -25,15 +25,9 @@ class Bot extends Command
 
         try {
             $username = $telegram->call('getMe')['username'];
-            // Private chats use buttons; in groups commands stay as a way to call the menu.
-            $telegram->call('deleteMyCommands');
-            $telegram->call('setMyCommands', [
-                'scope' => ['type' => 'all_group_chats'],
-                'commands' => [
-                    ['command' => 'schedule', 'description' => 'Графік і меню'],
-                    ['command' => 'queue', 'description' => 'Обрати черги'],
-                ],
-            ]);
+            // The only command opens the menu; everything else is done with its buttons.
+            $telegram->call('deleteMyCommands', ['scope' => ['type' => 'all_group_chats']]);
+            $telegram->call('setMyCommands', ['commands' => [['command' => 'menu', 'description' => 'Відкрити меню']]]);
         } catch (TelegramException $e) {
             $this->error($e->getMessage());
             Sleep::for(10)->seconds();

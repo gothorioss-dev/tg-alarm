@@ -43,8 +43,8 @@ final class DeliverySender
         }
 
         try {
-            $isGroup = $chat && ! $chat->isPrivate();
-            $this->telegram->send($delivery->telegram_id, $delivery->text, $isGroup ? ['reply_markup' => Keyboards::scheduleOnly()] : []);
+            $isAdminAlert = str_starts_with($delivery->dedupe_key, 'admin:');
+            $this->telegram->send($delivery->telegram_id, $delivery->text, $isAdminAlert ? [] : ['reply_markup' => Keyboards::notification()]);
             $delivery->update(['status' => Delivery::SENT, 'sent_at' => now(), 'error' => null]);
 
             return true;

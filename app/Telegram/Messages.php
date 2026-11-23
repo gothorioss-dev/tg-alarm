@@ -55,7 +55,7 @@ final class Messages
     public function currentSchedule(array $days, array $queues, bool $active = true): string
     {
         if ($queues === []) {
-            return 'Черги ще не обрано. Натисніть «⚙️ Черги».';
+            return 'Черги ще не обрано. Оберіть їх у меню.';
         }
 
         $note = $active ? '' : "\n\n🔕 Сповіщення вимкнено.";
@@ -91,14 +91,9 @@ final class Messages
     {
         return "Повідомляю про графіки відключень і зміни в них для обраних черг. Користуйтеся кнопками:\n\n"
             ."📅 <b>Графік</b> — на сьогодні та завтра\n"
-            ."⚙️ <b>Черги</b> — обрати одну або кілька\n"
+            ."⚙️ <b>Змінити / додати чергу</b> — одну або кілька\n"
             ."🔕 / 🔔 — вимкнути або увімкнути сповіщення\n\n"
             .'У групі налаштування змінюють адміністратори.';
-    }
-
-    public function stopped(): string
-    {
-        return '🔕 Сповіщення вимкнено. Обрані черги збережено.';
     }
 
     public function adminsOnly(): string
@@ -113,16 +108,6 @@ final class Messages
         return $day->day.' '.self::MONTHS[$day->month - 1];
     }
 
-    public function welcome(): string
-    {
-        return '👋 Вітаю! Повідомлятиму про графіки відключень світла. Кнопки меню — внизу.';
-    }
-
-    public function enabled(): string
-    {
-        return '🔔 Сповіщення увімкнено.';
-    }
-
     public function queueToggled(string $queue, bool $added): string
     {
         return ($added ? 'Додано чергу ' : 'Прибрано чергу ').$queue;
@@ -134,9 +119,11 @@ final class Messages
     }
 
     /** @param list<string> $queues */
-    public function selected(array $queues): string
+    public function menu(array $queues, bool $active): string
     {
-        return '✅ '.(count($queues) === 1 ? 'Обрано чергу: ' : 'Обрано черги: ').'<b>'.implode(', ', $queues).'</b>';
+        return "☰ <b>Меню</b>\n\n"
+            .'Черги: '.($queues === [] ? 'не обрано' : '<b>'.implode(', ', $queues).'</b>')."\n"
+            .'Сповіщення: '.($active ? '🔔 увімкнено' : '🔕 вимкнено');
     }
 
     /** @param list<Interval> $intervals */

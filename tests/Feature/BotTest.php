@@ -5,7 +5,6 @@ namespace Tests\Feature;
 use App\Models\Chat;
 use App\Models\Delivery;
 use App\Telegram\DeliverySender;
-use App\Telegram\Keyboards;
 use App\Telegram\TelegramClient;
 use App\Telegram\TelegramException;
 use App\Telegram\UpdateHandler;
@@ -85,40 +84,56 @@ class BotTest extends TestCase
         Http::assertNothingSent();
     }
 
-    public function test_private_chat_is_driven_by_buttons(): void
+    private function hasButton($request, string $data): bool
+    {
+        return in_array($data, array_column(array_merge(...($request['reply_markup']['inline_keyboard'] ?? [[]])), 'callback_data'), true);
+    }
+
+    public function test_menu_is_edited_in_place_and_toggles_notifications(): void
     {
         $this->fake();
         $this->update($this->message('/start'));
-        Http::assertSent(fn ($r) => ($r['reply_markup']['keyboard'][0][0]['text'] ?? '') === Keyboards::SCHEDULE);
-
         $this->update($this->press('done'));
         Http::assertSent(fn ($r) => ($r['show_alert'] ?? false) === true);
 
         $this->update($this->press('q:5.2'));
-        $this->update($this->message(Keyboards::STOP));
+        $this->update($this->press('stop'));
         $chat = Chat::query()->sole();
         $this->assertFalse($chat->active);
-        Http::assertSent(fn ($r) => ($r['reply_markup']['keyboard'][1][0]['text'] ?? '') === Keyboards::START);
+        Http::assertSent(fn ($r) => str_ends_with($r->url(), 'editMessageText') && $this->hasButton($r, 'enable'));
 
         // Changing queues does not silently turn notifications back on.
         $this->update($this->press('q:6.1'));
         $this->assertFalse($chat->refresh()->active);
 
-        $this->update($this->message(Keyboards::START));
+        $this->update($this->press('enable'));
         $this->assertTrue($chat->refresh()->active);
         $this->assertSame(['5.2', '6.1'], $chat->subscriptions->pluck('queue')->all());
     }
 
-    public function test_group_buttons_schedule_is_public_and_settings_are_not(): void
+    public function test_any_private_text_opens_menu_and_notification_button_sends_new_message(): void
+    {
+        $this->fake();
+        $this->update($this->message('привіт'));
+        Http::assertSent(fn ($r) => str_ends_with($r->url(), 'sendMessage') && $this->hasButton($r, 'queue'));
+
+        $this->update($this->press('new:schedule'));
+        Http::assertSent(fn ($r) => str_ends_with($r->url(), 'sendMessage') && $this->hasButton($r, 'menu'));
+        Http::assertNotSent(fn ($r) => str_ends_with($r->url(), 'editMessageText'));
+    }
+
+    public function test_group_schedule_is_public_and_settings_are_not(): void
     {
         $this->fake();
         $chat = Chat::query()->create(['telegram_id' => -5, 'type' => 'supergroup', 'active' => true]);
         $chat->subscriptions()->create(['queue' => '1.1']);
 
         $this->update($this->press('schedule', 'supergroup', -5));
-        Http::assertSent(fn ($r) => ($r['reply_markup']['inline_keyboard'][0][0]['callback_data'] ?? '') === 'schedule');
+        Http::assertSent(fn ($r) => $this->hasButton($r, 'menu'));
 
-        $this->update($this->press('stop', 'supergroup', -5));
+        foreach (['stop', 'new:stop', 'new:queue'] as $data) {
+            $this->update($this->press($data, 'supergroup', -5));
+        }
         $this->assertTrue($chat->refresh()->active);
 
         $this->memberStatus = 'creator';

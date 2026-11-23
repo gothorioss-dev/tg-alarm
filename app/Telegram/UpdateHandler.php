@@ -9,9 +9,9 @@ use App\Schedule\Queues;
 final class UpdateHandler
 {
     /** Actions that only show information and are open to every group member. */
-    private const PUBLIC_ACTIONS = ['schedule', 'help'];
+    private const PUBLIC_ACTIONS = ['schedule', 'help', 'menu'];
 
-    private const ACTIONS = ['start', 'queue', 'schedule', 'stop', 'enable', 'help'];
+    private const ACTIONS = ['start', 'queue', 'schedule', 'stop', 'enable', 'help', 'menu'];
 
     public function __construct(private TelegramClient $telegram, private Messages $messages) {}
 
@@ -40,9 +40,9 @@ final class UpdateHandler
         }
 
         $text = trim($message['text'] ?? '');
-        $action = $private ? (Keyboards::ACTIONS[$text] ?? null) : null;
+        $action = null;
 
-        if ($action === null && preg_match('/^\/([a-z]+)(?:@(\w+))?(?:\s|$)/i', $text, $match)) {
+        if (preg_match('/^\/([a-z]+)(?:@(\w+))?(?:\s|$)/i', $text, $match)) {
             if (($match[2] ?? '') !== '' && strcasecmp($match[2], $botUsername) !== 0) {
                 return;
             }
@@ -52,7 +52,7 @@ final class UpdateHandler
             if (! $private || $text === '') {
                 return;
             }
-            $action = 'help';
+            $action = 'menu';
         }
 
         if (! in_array($action, self::PUBLIC_ACTIONS, true)
@@ -70,6 +70,8 @@ final class UpdateHandler
     {
         $chat = $query['message']['chat'] ?? null;
         $data = (string) ($query['data'] ?? '');
+        $newMessage = str_starts_with($data, Keyboards::NEW_PREFIX);
+        $data = $newMessage ? substr($data, strlen(Keyboards::NEW_PREFIX)) : $data;
 
         if ($chat === null) {
             return;
@@ -89,7 +91,7 @@ final class UpdateHandler
         }
         if (in_array($data, self::ACTIONS, true)) {
             $this->answer($query['id']);
-            $this->run($data, $chatId, $chat['type']);
+            $this->run($data, $chatId, $chat['type'], $newMessage ? null : (int) $query['message']['message_id']);
 
             return;
         }
@@ -110,32 +112,20 @@ final class UpdateHandler
         }
 
         $this->answer($query['id'], $this->messages->queueToggled($queue, $added));
-        $this->edit('editMessageReplyMarkup', [
-            'chat_id' => $chatId,
-            'message_id' => $query['message']['message_id'],
-            'reply_markup' => Keyboards::queues($model),
-        ]);
+        $this->render($chatId, $this->messages->chooseQueue(), Keyboards::queues($model), (int) $query['message']['message_id']);
     }
 
     /** @param array<string, mixed> $query */
     private function finishSelection(array $query, int $chatId, string $type): void
     {
-        $queues = $this->chat($chatId, $type)->subscriptions->pluck('queue')->all();
-
-        if ($queues === []) {
+        if (! $this->chat($chatId, $type)->subscriptions()->exists()) {
             $this->answer($query['id'], $this->messages->nothingSelected(), alert: true);
 
             return;
         }
 
         $this->answer($query['id']);
-        $this->edit('editMessageText', [
-            'chat_id' => $chatId,
-            'message_id' => $query['message']['message_id'],
-            'text' => $this->messages->selected($queues),
-            'parse_mode' => 'HTML',
-        ]);
-        $this->showSchedule($chatId, $type);
+        $this->showSchedule($chatId, $type, (int) $query['message']['message_id']);
     }
 
     /** @param array<string, mixed> $member */
@@ -152,15 +142,17 @@ final class UpdateHandler
         }
     }
 
-    private function run(string $action, int $chatId, string $type): void
+    /** With a message id the screen replaces that message, otherwise it is sent as a new one. */
+    private function run(string $action, int $chatId, string $type, ?int $messageId = null): void
     {
         match ($action) {
             'start' => $this->start($chatId, $type),
-            'queue' => $this->showQueues($chatId, $type),
-            'schedule' => $this->showSchedule($chatId, $type),
-            'stop' => $this->setActive($chatId, $type, false),
-            'enable' => $this->setActive($chatId, $type, true),
-            'help' => $this->reply($chatId, $type, $this->messages->help()),
+            'queue' => $this->showQueues($chatId, $type, $messageId),
+            'schedule' => $this->showSchedule($chatId, $type, $messageId),
+            'stop' => $this->setActive($chatId, $type, false, $messageId),
+            'enable' => $this->setActive($chatId, $type, true, $messageId),
+            'menu' => $this->showMenu($chatId, $type, $messageId),
+            'help' => $this->render($chatId, $this->messages->help(), Keyboards::back(), $messageId),
         };
     }
 
@@ -169,67 +161,67 @@ final class UpdateHandler
         $chat = $this->chat($chatId, $type);
         $chat->update(['active' => true]);
 
-        // One message cannot carry both the bottom keyboard and the queue buttons.
-        if ($chat->subscriptions()->exists()) {
-            $this->showSchedule($chatId, $type);
-
-            return;
-        }
-        if ($chat->isPrivate()) {
-            $this->reply($chatId, $type, $this->messages->welcome());
-        }
-        $this->showQueues($chatId, $type);
+        $chat->subscriptions()->exists() ? $this->showMenu($chatId, $type) : $this->showQueues($chatId, $type);
     }
 
-    private function showQueues(int $chatId, string $type): void
+    private function showMenu(int $chatId, string $type, ?int $messageId = null): void
     {
-        $this->telegram->send($chatId, $this->messages->chooseQueue(), [
-            'reply_markup' => Keyboards::queues($this->chat($chatId, $type)),
-        ]);
+        $chat = $this->chat($chatId, $type);
+        $text = $this->messages->menu($chat->subscriptions->pluck('queue')->all(), $chat->active);
+        $this->render($chatId, $text, Keyboards::menu($chat), $messageId);
     }
 
-    private function showSchedule(int $chatId, string $type): void
+    private function showQueues(int $chatId, string $type, ?int $messageId = null): void
     {
-        $chat = $this->find($chatId);
-        $queues = $chat?->subscriptions->pluck('queue')->all() ?? [];
+        $this->render($chatId, $this->messages->chooseQueue(), Keyboards::queues($this->chat($chatId, $type)), $messageId);
+    }
 
-        // Without a selection the most useful answer is the selection itself.
-        if ($queues === [] && $type === 'private') {
-            $this->showQueues($chatId, $type);
-
-            return;
-        }
-
+    private function showSchedule(int $chatId, string $type, ?int $messageId = null): void
+    {
+        $chat = $this->chat($chatId, $type);
+        $queues = $chat->subscriptions->pluck('queue')->all();
         $today = now(config('telegram.timezone'));
         $days = Schedule::query()->whereBetween('date', [$today->format('Y-m-d'), $today->addDay()->format('Y-m-d')])
             ->orderBy('date')->get()->mapWithKeys(fn (Schedule $s) => [$s->date => $s->day()])->all();
 
-        $this->reply($chatId, $type, $this->messages->currentSchedule($days, $queues, $chat->active ?? true));
+        $this->render($chatId, $this->messages->currentSchedule($days, $queues, $chat->active), Keyboards::schedule(), $messageId);
     }
 
-    private function setActive(int $chatId, string $type, bool $active): void
+    private function setActive(int $chatId, string $type, bool $active, ?int $messageId): void
     {
-        $chat = $this->chat($chatId, $type);
-        $chat->update(['active' => $active]);
+        $this->chat($chatId, $type)->update(['active' => $active]);
+        $this->showMenu($chatId, $type, $messageId);
+    }
 
-        $this->reply($chatId, $type, $active ? $this->messages->enabled() : $this->messages->stopped());
+    /** @param array<string, mixed> $keyboard */
+    private function render(int $chatId, string $text, array $keyboard, ?int $messageId): void
+    {
+        if ($messageId === null) {
+            $this->telegram->send($chatId, $text, ['reply_markup' => $keyboard]);
 
-        if ($active && ! $chat->subscriptions()->exists()) {
-            $this->showQueues($chatId, $type);
+            return;
         }
-    }
 
-    /** Sends a message with the menu that fits the chat type and its current state. */
-    private function reply(int $chatId, string $type, string $text): void
-    {
-        $this->telegram->send($chatId, $text, [
-            'reply_markup' => Keyboards::menu($type === 'private', $this->find($chatId)->active ?? true),
-        ]);
-    }
-
-    private function find(int $chatId): ?Chat
-    {
-        return Chat::query()->where('telegram_id', $chatId)->first();
+        try {
+            $this->telegram->call('editMessageText', [
+                'chat_id' => $chatId,
+                'message_id' => $messageId,
+                'text' => $text,
+                'parse_mode' => 'HTML',
+                'link_preview_options' => ['is_disabled' => true],
+                'reply_markup' => $keyboard,
+            ]);
+        } catch (TelegramException $e) {
+            // A double tap leaves the message unchanged, which Telegram reports as an error.
+            if (str_contains($e->getMessage(), 'not modified')) {
+                return;
+            }
+            if ($e->getCode() !== 400) {
+                throw $e;
+            }
+            // The message can no longer be edited.
+            $this->telegram->send($chatId, $text, ['reply_markup' => $keyboard]);
+        }
     }
 
     private function chat(int $chatId, string $type): Chat
@@ -259,19 +251,6 @@ final class UpdateHandler
             $this->telegram->call('answerCallbackQuery', array_filter(['callback_query_id' => $id, 'text' => $text, 'show_alert' => $alert]));
         } catch (TelegramException) {
             // The query may have expired; the action itself still matters.
-        }
-    }
-
-    /** @param array<string, mixed> $params */
-    private function edit(string $method, array $params): void
-    {
-        try {
-            $this->telegram->call($method, $params);
-        } catch (TelegramException $e) {
-            // A double tap leaves the message unchanged, which Telegram reports as an error.
-            if (! str_contains($e->getMessage(), 'not modified')) {
-                throw $e;
-            }
         }
     }
 }

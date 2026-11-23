@@ -5,52 +5,29 @@ namespace App\Telegram;
 use App\Models\Chat;
 use App\Schedule\Queues;
 
+/** Inline keyboards; they work the same in private chats and groups. */
 final class Keyboards
 {
-    public const SCHEDULE = '📅 Графік';
+    /** Opens the screen in a new message, so the notification above stays intact. */
+    public const NEW_PREFIX = 'new:';
 
-    public const QUEUES = '⚙️ Мої черги';
-
-    public const STOP = '🔕 Вимкнути сповіщення';
-
-    public const START = '🔔 Увімкнути сповіщення';
-
-    /** Button label => action, for the private reply keyboard. */
-    public const ACTIONS = [
-        self::SCHEDULE => 'schedule',
-        self::QUEUES => 'queue',
-        self::STOP => 'stop',
-        self::START => 'enable',
-    ];
-
-    /**
-     * Bottom keyboard in private chats. Groups get inline buttons instead: in privacy mode
-     * the bot does not receive plain text sent by a reply keyboard there.
-     *
-     * @return array<string, mixed>
-     */
-    public static function menu(bool $private, bool $active): array
+    /** @return array<string, mixed> */
+    public static function menu(Chat $chat): array
     {
-        $toggle = $active ? self::STOP : self::START;
-
-        if ($private) {
-            return [
-                'keyboard' => [[['text' => self::SCHEDULE], ['text' => self::QUEUES]], [['text' => $toggle]]],
-                'resize_keyboard' => true,
-                'is_persistent' => true,
-            ];
-        }
-
         return ['inline_keyboard' => [
-            [self::inline(self::SCHEDULE, 'schedule'), self::inline('⚙️ Черги', 'queue')],
-            [self::inline($toggle, self::ACTIONS[$toggle])],
+            [self::inline('📅 Графік', 'schedule')],
+            [self::inline('⚙️ Змінити / додати чергу', 'queue')],
+            [$chat->active
+                ? self::inline('🔕 Вимкнути сповіщення', 'stop')
+                : self::inline('🔔 Увімкнути сповіщення', 'enable')],
+            [self::inline('ℹ️ Допомога', 'help')],
         ]];
     }
 
     /** @return array<string, mixed> */
-    public static function queues(?Chat $chat): array
+    public static function queues(Chat $chat): array
     {
-        $selected = $chat?->subscriptions()->pluck('queue')->all() ?? [];
+        $selected = $chat->subscriptions()->pluck('queue')->all();
         $buttons = array_map(
             fn (string $queue) => self::inline((in_array($queue, $selected, true) ? '✅ ' : '').$queue, "q:{$queue}"),
             Queues::ALL,
@@ -60,9 +37,24 @@ final class Keyboards
     }
 
     /** @return array<string, mixed> */
-    public static function scheduleOnly(): array
+    public static function schedule(): array
     {
-        return ['inline_keyboard' => [[self::inline(self::SCHEDULE, 'schedule')]]];
+        return ['inline_keyboard' => [[self::inline('🔄 Оновити', 'schedule'), self::inline('☰ Меню', 'menu')]]];
+    }
+
+    /** @return array<string, mixed> */
+    public static function back(): array
+    {
+        return ['inline_keyboard' => [[self::inline('☰ Меню', 'menu')]]];
+    }
+
+    /** @return array<string, mixed> */
+    public static function notification(): array
+    {
+        return ['inline_keyboard' => [[
+            self::inline('📅 Графік', self::NEW_PREFIX.'schedule'),
+            self::inline('☰ Меню', self::NEW_PREFIX.'menu'),
+        ]]];
     }
 
     /** @return array{text: string, callback_data: string} */
