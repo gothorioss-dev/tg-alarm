@@ -17,46 +17,41 @@ final class Messages
 
     public function __construct(private SourceRegistry $sources) {}
 
-    /**
-     * @param  list<string>  $queues
-     * @param  CarbonImmutable|null  $now  current time when the schedule is for today
-     */
-    public function newSchedule(string $date, DaySchedule $day, array $queues, string $source, string $url, ?CarbonImmutable $now = null): string
+    /** @param list<string> $queues */
+    public function newSchedule(string $date, DaySchedule $day, array $queues, string $source, string $url): string
     {
-        $blocks = array_map(function (string $queue) use ($day, $now) {
-            $minute = $now === null ? null : $now->hour * 60 + $now->minute;
-            $impact = new ChangeImpact([], $day->intervals($queue), $minute);
-
-            return $this->impactNow($impact, $now).$this->queue($queue, $day);
-        }, $queues);
-
-        return "📅 <b>Графік відключень на {$this->date($date)}</b>\n\n".implode("\n\n", $blocks).$this->footer($source, $url);
+        return "📅 <b>Графік відключень на {$this->date($date)}</b>\n\n"
+            .implode("\n\n", array_map(fn (string $q) => $this->queue($q, $day), $queues))
+            .$this->footer($source, $url);
     }
 
     /** @param array<string, ChangeImpact> $impacts by queue */
-    public function changedSchedule(string $date, DaySchedule $new, array $impacts, bool $correction, string $source, string $url, CarbonImmutable $now): string
+    public function changedSchedule(string $date, DaySchedule $new, array $impacts, bool $correction, string $source, string $url): string
     {
-        $title = $correction ? '⚠️ <b>Уточнення графіка на ' : '🔄 <b>Зміни в графіку на ';
+        $title = $correction ? "⚠️ <b>Графік на {$this->date($date)} уточнено</b>" : "🔄 <b>Графік на {$this->date($date)} змінено</b>";
         $blocks = [];
 
         foreach ($impacts as $queue => $impact) {
-            $block = $this->impactNow($impact, $now).$this->queue((string) $queue, $new);
+            $block = "<b>Черга {$queue}</b>";
 
             if ($impact->added !== []) {
-                $block .= "\n➕ Додано відключення: ".$this->changedIntervals($impact->added, $impact->minute);
+                $block .= "\n➕ Додали відключення:\n".$this->list($impact->added, $impact->minute);
             }
             if ($impact->removed !== []) {
-                $block .= "\n➖ Скасовано відключення: ".$this->changedIntervals($impact->removed, $impact->minute);
+                $block .= "\n➖ Скасували відключення:\n".$this->list($impact->removed, $impact->minute);
             }
-            $blocks[] = $block;
+
+            $blocks[] = $block."\n\nТепер графік такий:\n".$this->outages((string) $queue, $new);
         }
 
-        return $title.$this->date($date)."</b>\n\n".implode("\n\n", $blocks).$this->footer($source, $url);
+        return $title."\n\n".implode("\n\n", $blocks).$this->footer($source, $url);
     }
 
     public function emergency(string $text, string $source, string $url): string
     {
-        return '🚨 <b>'.e(mb_strimwidth($text, 0, 3000, '…')).'</b>'.$this->footer($source, $url);
+        $note = preg_match('/скасован/ui', $text) ? '' : "\n\nПід час аварійних відключень звичайний графік може не діяти.";
+
+        return "🚨 <b>Аварійні відключення</b>\n\n".e(mb_strimwidth($text, 0, 3000, '…')).$note.$this->footer($source, $url);
     }
 
     /** @param list<string> $queues */
@@ -66,48 +61,61 @@ final class Messages
             return 'Черги ще не обрано.';
         }
 
-        $footer = $checkedAt === null ? '' : "\n\n<i>Дані перевірено о ".CarbonImmutable::parse($checkedAt, 'UTC')->setTimezone(config('telegram.timezone'))->format('H:i, d.m').'</i>';
-        $footer .= $active ? '' : "\n🔕 Сповіщення вимкнено.";
-
-        if ($timeline->days() === []) {
-            return 'Графіків на сьогодні та завтра поки немає.'.($active ? ' Коли їх опублікують, я повідомлю.' : '').$footer;
-        }
-
+        $today = $timeline->now()->format('Y-m-d');
         $parts = [];
 
-        if ($timeline->knowsToday()) {
-            $parts[] = implode("\n", array_map(fn (string $q) => $this->status($q, $timeline), $queues));
-        }
         foreach ($timeline->days() as $date => $day) {
-            $parts[] = "📅 <b>{$this->date($date)}</b>\n"
-                .implode("\n", array_map(fn (string $q) => $this->queue($q, $day), $queues));
+            $parts[] = '📅 <b>'.($date === $today ? 'Сьогодні' : 'Завтра').", {$this->date($date)}</b>\n\n"
+                .implode("\n\n", array_map(fn (string $q) => $this->queue($q, $day), $queues));
         }
 
-        return implode("\n\n", $parts).$footer;
+        if ($parts === []) {
+            $parts[] = 'Графіків на сьогодні та завтра поки немає.'.($active ? ' Коли їх опублікують, я повідомлю.' : '');
+        } else {
+            $next = array_filter(array_map(fn (string $q) => $this->next($q, $timeline, count($queues) > 1), $queues));
+
+            if ($next !== []) {
+                $parts[] = "⏰ <b>Наступне за графіком</b>\n".implode("\n", $next);
+            }
+            $parts[] = '<i>'.$this->disclaimer().'</i>';
+        }
+        if ($checkedAt !== null) {
+            $parts[] = '<i>Дані перевірено о '.CarbonImmutable::parse($checkedAt, 'UTC')->setTimezone(config('telegram.timezone'))->format('H:i, d.m').'</i>';
+        }
+        if (! $active) {
+            $parts[] = '🔕 Сповіщення вимкнено.';
+        }
+
+        return implode("\n\n", $parts);
     }
 
     public function queue(string $queue, DaySchedule $day): string
     {
-        $intervals = $day->intervals($queue);
-
-        return "<b>Черга {$queue}:</b> ".($intervals === [] ? '✅ без відключень' : $this->intervals($intervals));
+        return "<b>Черга {$queue}</b>\n".$this->outages($queue, $day);
     }
 
     public function chooseQueue(): string
     {
-        return "Оберіть чергу (можна кілька). Надсилатиму графік відключень і зміни лише для обраних черг.\n\n"
-            .'Свою чергу можна дізнатися <a href="'.e(config('telegram.queue_lookup_url')).'">на сайті Запоріжжяобленерго</a>.';
+        return "<b>Оберіть чергу</b>\n\nНатисніть на номер своєї черги — з'явиться ✅. Потім натисніть «💾 Готово». Можна обрати кілька.\n\n"
+            .'Не знаєте свою чергу? Подивіться <a href="'.e(config('telegram.queue_lookup_url')).'">на сайті Запоріжжяобленерго</a>.';
     }
 
     public function guide(): string
     {
         return "📖 <b>Довідник</b>\n\n"
-            ."Позначте свою чергу (можна кілька) і натисніть «💾 Готово». Далі я сам повідомлятиму про новий графік, зміни для ваших черг та аварійні відключення.\n\n"
-            ."Кнопки внизу:\n"
-            ."📅 <b>Графік</b> — стан зараз і відключення на сьогодні та завтра\n"
-            ."⚡ <b>Мої черги</b> — додати чергу; повторне натискання прибирає її\n"
-            ."⚙️ <b>Налаштування</b> — сповіщення та нагадування перед відключенням\n\n"
-            ."Це неофіційний бот, фактичні відключення можуть відрізнятися. Джерела (якщо розходяться, перевага за верхнім):\n"
+            ."Бот надсилає графік відключень світла для вашої черги.\n\n"
+            ."<b>Як почати</b>\n"
+            ."1. Натисніть на номер своєї черги — з'явиться ✅. Можна обрати кілька.\n"
+            ."2. Натисніть «💾 Готово».\n"
+            ."Далі бот сам повідомить про новий графік і зміни.\n\n"
+            ."<b>Кнопки внизу</b>\n"
+            ."📅 <b>Графік</b> — відключення на сьогодні та завтра\n"
+            ."⚡ <b>Мої черги</b> — додати або прибрати чергу\n"
+            ."⚙️ <b>Налаштування</b> — сповіщення та нагадування перед відключенням\n"
+            ."📖 <b>Довідник</b> — ця підказка\n\n"
+            ."❗ <b>Важливо</b>\n"
+            .$this->disclaimer()." Бот не знає, чи є світло саме у вас.\n\n"
+            ."Бот неофіційний. Джерела (якщо розходяться, перевага за верхнім):\n"
             .$this->sourceLinks();
     }
 
@@ -138,7 +146,8 @@ final class Messages
         return "⚙️ <b>Налаштування</b>\n\n"
             .'Сповіщення: '.($active ? '🔔 увімкнено' : '🔕 вимкнено')."\n"
             .'Нагадування перед відключенням: '.$this->reminderLabel($remindMinutes)
-            .($active ? '' : "\n\nПоки сповіщення вимкнено, нагадування теж не надходять.");
+            .($active ? '' : "\n\nПоки сповіщення вимкнено, нагадування теж не надходять.")
+            ."\n\nНижче оберіть, за скільки хвилин нагадувати:";
     }
 
     public function reminderLabel(?int $minutes): string
@@ -148,52 +157,53 @@ final class Messages
 
     public function reminder(string $queue, Outage $outage, CarbonImmutable $now): string
     {
-        return "⏰ <b>Черга {$queue}: відключення через {$this->duration($now, $outage->start)}</b>\n"
-            ."З {$outage->start->format('H:i')} до {$this->endTime($outage->end, $outage->start)} за графіком.";
+        return "⏰ <b>За графіком через {$this->duration($now, $outage->start)} відключення</b>\n"
+            ."Черга {$queue}: з {$outage->start->format('H:i')} до {$this->endTime($outage->end, $outage->start)}";
     }
 
-    /** The most urgent line: the change came when the outage was already due. */
-    private function impactNow(ChangeImpact $impact, ?CarbonImmutable $now): string
+    private function next(string $queue, OutageTimeline $timeline, bool $withQueue): ?string
     {
-        if ($now === null || $impact->minute === null || ! $impact->affectsNow()) {
-            return '';
+        $next = $timeline->next($queue);
+
+        if ($next === null) {
+            return null;
         }
 
-        $time = $now->format('H:i');
-        $end = fn (Interval $interval) => explode('–', (string) $interval)[1];
-
-        return match (true) {
-            $impact->is === null => "🟢 <b>Станом на {$time} відключення скасовано</b> (мало бути до {$end($impact->was)})\n",
-            $impact->was === null => "🔴 <b>Станом на {$time} відключення вже діє — до {$end($impact->is)}</b>\n",
-            default => "🔴 <b>Станом на {$time} діє відключення — до {$end($impact->is)}</b> (було до {$end($impact->was)})\n",
-        };
-    }
-
-    /** @param list<Interval> $intervals */
-    private function changedIntervals(array $intervals, ?int $minute): string
-    {
-        return implode(', ', array_map(
-            fn (Interval $interval) => $interval.($minute !== null && $interval->to <= $minute ? ' (уже минуло)' : ''),
-            $intervals,
-        ));
-    }
-
-    private function status(string $queue, OutageTimeline $timeline): string
-    {
         $now = $timeline->now();
+        $day = $next->start->isSameDay($now) ? '' : $this->date($next->start->format('Y-m-d')).' ';
 
-        if ($current = $timeline->current($queue)) {
-            return "🔴 <b>{$queue}:</b> зараз відключення до {$this->endTime($current->end, $now)}";
-        }
+        return ($withQueue ? "Черга {$queue}: " : '')
+            ."{$day}з {$next->start->format('H:i')} до {$this->endTime($next->end, $next->start)} (через {$this->duration($now, $next->start)})";
+    }
 
-        $text = "🟢 <b>{$queue}:</b> зараз за графіком світло є";
+    private function outages(string $queue, DaySchedule $day): string
+    {
+        $intervals = $day->intervals($queue);
 
-        if ($next = $timeline->next($queue)) {
-            $day = $next->start->isSameDay($now) ? '' : $this->date($next->start->format('Y-m-d')).' ';
-            $text .= "\nНаступне відключення: {$day}о {$next->start->format('H:i')} (через {$this->duration($now, $next->start)})";
-        }
+        return $intervals === [] ? 'Відключень за графіком немає' : $this->list($intervals);
+    }
 
-        return $text;
+    /**
+     * One outage per line, with a note on the time that has already started.
+     *
+     * @param  list<Interval>  $intervals
+     */
+    private function list(array $intervals, ?int $minute = null): string
+    {
+        return implode("\n", array_map(function (Interval $interval) use ($minute) {
+            $note = match (true) {
+                $minute === null || $interval->from > $minute => '',
+                $interval->to <= $minute => ' (цей час уже минув)',
+                default => ' (цей час уже почався)',
+            };
+
+            return '• '.str_replace('–', ' до ', "з {$interval}").$note;
+        }, $intervals));
+    }
+
+    private function disclaimer(): string
+    {
+        return 'Це лише графік. Насправді світло можуть вимкнути або увімкнути в інший час.';
     }
 
     /** Midnight right after the reference day is shown as 24:00, as in the source. */
@@ -216,12 +226,6 @@ final class Messages
         $rest = $minutes % 60;
 
         return trim(($hours ? "{$hours} год " : '').($rest ? "{$rest} хв" : ''));
-    }
-
-    /** @param list<Interval> $intervals */
-    private function intervals(array $intervals): string
-    {
-        return implode(', ', array_map('strval', $intervals));
     }
 
     private function footer(string $source, string $url): string

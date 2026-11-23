@@ -61,7 +61,7 @@ class ReminderTest extends TestCase
         $this->assertCount(0, $this->at('16:29'));
         $texts = $this->at('16:30');
         $this->assertStringContainsString('через 30 хв', $texts[0]);
-        $this->assertStringContainsString('З 17:00 до 22:00', $texts[0]);
+        $this->assertStringContainsString('з 17:00 до 22:00', $texts[0]);
         $this->assertCount(1, $this->at('16:45'));
         $this->assertCount(1, $this->at('17:00'));
     }
@@ -102,18 +102,21 @@ class ReminderTest extends TestCase
         $this->assertStringContainsString('Налаштування', $this->press('settings'));
     }
 
-    public function test_schedule_after_selection_comes_from_stored_data_with_status(): void
+    public function test_schedule_after_selection_comes_from_stored_data(): void
     {
         SourceState::query()->create(['source' => 'site', 'succeeded_at' => CarbonImmutable::parse('2026-11-23 13:05', 'Europe/Kyiv')->utc()]);
         $this->at('13:48');
         $text = $this->press('done');
-        $this->assertStringContainsString('зараз за графіком світло є', $text);
-        $this->assertStringContainsString('о 17:00 (через 3 год 12 хв)', $text);
+        $this->assertStringContainsString('Наступне за графіком', $text);
+        $this->assertStringContainsString('з 17:00 до 22:00 (через 3 год 12 хв)', $text);
         $this->assertStringContainsString('13:05', $text);
         Http::assertNotSent(fn ($r) => ! str_contains($r->url(), 'api.telegram.org'));
 
+        // The bot knows the schedule, not whether the power is really on.
         $this->at('18:00');
-        $this->assertStringContainsString('зараз відключення до 22:00', $this->press('schedule'));
+        $text = $this->press('schedule');
+        $this->assertStringNotContainsString('зараз', mb_strtolower($text));
+        $this->assertStringContainsString('Це лише графік', $text);
     }
 
     public function test_first_start_shows_guide_then_menu(): void

@@ -33,11 +33,6 @@ final class OutageTimeline
         return array_filter($this->days, fn (string $date) => $date >= $this->now->format('Y-m-d'), ARRAY_FILTER_USE_KEY);
     }
 
-    public function knowsToday(): bool
-    {
-        return isset($this->days[$this->now->format('Y-m-d')]);
-    }
-
     /** @return list<Outage> */
     public function outages(string $queue): array
     {
@@ -61,17 +56,6 @@ final class OutageTimeline
         }
 
         return $result;
-    }
-
-    public function current(string $queue): ?Outage
-    {
-        foreach ($this->outages($queue) as $outage) {
-            if ($outage->start <= $this->now && $outage->end > $this->now) {
-                return $outage;
-            }
-        }
-
-        return null;
     }
 
     public function next(string $queue): ?Outage

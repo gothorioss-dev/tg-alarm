@@ -34,7 +34,7 @@ final class Outbox
 
         $expires = CarbonImmutable::parse($date, config('telegram.timezone'))->addDay()->utc();
 
-        $this->eachChat(function (Chat $chat, array $queues) use ($date, $old, $new, $correction, $publicationId, $source, $url, $changed, $impacts, $now, $minute, $expires) {
+        $this->eachChat(function (Chat $chat, array $queues) use ($date, $old, $new, $correction, $publicationId, $source, $url, $changed, $impacts, $expires) {
             $queues = $changed === null ? $queues : array_values(array_intersect($queues, $changed));
 
             if ($queues === []) {
@@ -42,8 +42,8 @@ final class Outbox
             }
 
             $text = $old === null
-                ? $this->messages->newSchedule($date, $new, $queues, $source, $url, $minute === null ? null : $now)
-                : $this->messages->changedSchedule($date, $new, array_intersect_key($impacts, array_flip($queues)), $correction, $source, $url, $now);
+                ? $this->messages->newSchedule($date, $new, $queues, $source, $url)
+                : $this->messages->changedSchedule($date, $new, array_intersect_key($impacts, array_flip($queues)), $correction, $source, $url);
 
             $this->push($chat->telegram_id, "schedule:{$date}:{$publicationId}:{$chat->id}", $text, $expires);
         });

@@ -74,7 +74,7 @@ class IngestTest extends TestCase
 
         $this->assertCount(2, $this->sent(1));
         $this->assertCount(1, $this->sent(2));
-        $this->assertStringContainsString('Додано відключення: 17:00–22:00', $this->sent(1)[1]);
+        $this->assertStringContainsString("Додали відключення:\n• з 17:00 до 22:00", $this->sent(1)[1]);
     }
 
     public function test_queue_missing_from_new_version_means_no_outages(): void
@@ -82,8 +82,8 @@ class IngestTest extends TestCase
         $this->version('site', '09:00', $this->rows('10:30 – 13:30'), '08:57');
         $this->version('site', '09:30', '1.1: 07:00 – 12:00', '09:28');
 
-        $this->assertStringContainsString('без відключень', $this->sent(1)[1]);
-        $this->assertStringContainsString('Скасовано відключення: 10:30–13:30', $this->sent(1)[1]);
+        $this->assertStringContainsString('Відключень за графіком немає', $this->sent(1)[1]);
+        $this->assertStringContainsString("Скасували відключення:\n• з 10:30 до 13:30", $this->sent(1)[1]);
     }
 
     public function test_same_version_from_both_sources_is_sent_once(): void
@@ -120,7 +120,7 @@ class IngestTest extends TestCase
         $this->version('telegram', '10:50', $this->rows('17:00 - 22:00, 23:00 - 23:30'), '10:47');
         $this->version('site', '10:51', $this->rows('17:00 – 22:00'), '10:47');
 
-        $this->assertStringContainsString('Уточнення', $this->sent(1)[1]);
+        $this->assertStringContainsString('уточнено', $this->sent(1)[1]);
         $this->assertSame('site', Schedule::query()->first()->source);
     }
 
@@ -138,7 +138,7 @@ class IngestTest extends TestCase
         $this->version('site', '10:49', $this->rows('17:00 – 22:00'), '10:47');
         $this->version('telegram', '10:51', $this->rows('17:00 - 22:00, 23:00 - 23:30'), '10:47');
 
-        $this->assertStringContainsString('Уточнення', $this->sent(1)[1]);
+        $this->assertStringContainsString('уточнено', $this->sent(1)[1]);
     }
 
     public function test_newer_channel_version_overrides_site(): void
@@ -204,27 +204,27 @@ class IngestTest extends TestCase
 
         config(['sources.notify_past_changes' => true]);
         $this->version('site', '14:55', $this->rows('10:30 – 13:00'), '14:52');
-        $this->assertStringContainsString('уже минуло', $this->sent(1)[1]);
+        $this->assertStringContainsString('цей час уже минув', $this->sent(1)[1]);
     }
 
-    public function test_outage_added_after_its_start_is_reported_first(): void
+    public function test_outage_added_after_its_start_is_marked(): void
     {
         $this->atTime('10:49');
         $this->version('site', '09:00', $this->rows('17:00 – 22:00'), '08:57');
         $this->version('site', '10:48', $this->rows('10:30 – 13:30, 17:00 – 22:00'), '10:47');
 
-        $this->assertStringContainsString('Станом на 10:49 відключення вже діє — до 13:30', $this->sent(1)[1]);
+        $this->assertStringContainsString("Додали відключення:\n• з 10:30 до 13:30 (цей час уже почався)", $this->sent(1)[1]);
     }
 
-    public function test_cancelled_or_changed_current_outage_is_reported(): void
+    public function test_change_of_the_started_outage_is_reported(): void
     {
         $this->atTime('11:00');
         $this->version('site', '09:00', $this->rows('10:30 – 13:30'), '08:57');
         $this->version('site', '10:30', $this->rows('10:30 – 14:30'), '10:29');
         $this->version('site', '10:58', $this->rows('17:00 – 22:00'), '10:57');
 
-        $this->assertStringContainsString('діє відключення — до 14:30</b> (було до 13:30)', $this->sent(1)[1]);
-        $this->assertStringContainsString('відключення скасовано</b> (мало бути до 14:30)', $this->sent(1)[2]);
+        $this->assertStringContainsString("Додали відключення:\n• з 13:30 до 14:30", $this->sent(1)[1]);
+        $this->assertStringContainsString("Скасували відключення:\n• з 10:30 до 14:30 (цей час уже почався)", $this->sent(1)[2]);
     }
 
     public function test_mixed_change_marks_the_past_part_and_boundary_is_past(): void
@@ -234,15 +234,8 @@ class IngestTest extends TestCase
         $this->version('site', '13:20', $this->rows('10:30 – 12:00, 18:00 – 20:00'), '13:19');
 
         $text = $this->sent(1)[1];
-        $this->assertStringContainsString('12:00–13:30 (уже минуло)', $text);
-        $this->assertStringNotContainsString('Станом на', $text);
-    }
-
-    public function test_schedule_first_published_during_an_outage_shows_the_current_state(): void
-    {
-        $this->atTime('11:00');
-        $this->version('site', '10:55', $this->rows('10:30 – 13:30'));
-        $this->assertStringContainsString('вже діє — до 13:30', $this->sent(1)[0]);
+        $this->assertStringContainsString('з 12:00 до 13:30 (цей час уже минув)', $text);
+        $this->assertStringContainsString('• з 18:00 до 20:00', $text);
     }
 
     public function test_tomorrow_changes_are_never_past(): void
@@ -251,7 +244,7 @@ class IngestTest extends TestCase
         $this->version('site', '20:00', $this->rows('01:00 – 02:00'), '19:57', null, '24 Листопада');
         $this->version('site', '22:50', $this->rows('03:00 – 04:00'), '22:47', null, '24 Листопада');
         $this->assertCount(2, $this->sent(1));
-        $this->assertStringNotContainsString('Станом на', $this->sent(1)[1]);
+        $this->assertStringNotContainsString('уже', $this->sent(1)[1]);
     }
 
     public function test_first_run_on_real_data_is_silent_and_then_nothing_repeats(): void

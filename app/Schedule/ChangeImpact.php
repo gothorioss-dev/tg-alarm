@@ -2,7 +2,7 @@
 
 namespace App\Schedule;
 
-/** What a schedule change of one queue means at the given minute of that day. */
+/** What a schedule change of one queue changes, and whether it is still relevant. */
 final readonly class ChangeImpact
 {
     /** @var list<Interval> */
@@ -10,12 +10,6 @@ final readonly class ChangeImpact
 
     /** @var list<Interval> */
     public array $removed;
-
-    /** Outage in effect by the old schedule. */
-    public ?Interval $was;
-
-    /** Outage in effect by the new schedule. */
-    public ?Interval $is;
 
     /**
      * @param  list<Interval>  $old
@@ -26,8 +20,6 @@ final readonly class ChangeImpact
     {
         $this->added = DaySchedule::subtract($new, $old);
         $this->removed = DaySchedule::subtract($old, $new);
-        $this->was = $this->at($old);
-        $this->is = $this->at($new);
     }
 
     /** Every changed part is already over, so nothing can be done about it. */
@@ -40,23 +32,5 @@ final readonly class ChangeImpact
         }
 
         return true;
-    }
-
-    /** The change affects the outage that is, or was to be, in effect right now. */
-    public function affectsNow(): bool
-    {
-        return $this->was?->to !== $this->is?->to;
-    }
-
-    /** @param list<Interval> $intervals */
-    private function at(array $intervals): ?Interval
-    {
-        foreach ($intervals as $interval) {
-            if ($this->minute !== null && $interval->from <= $this->minute && $interval->to > $this->minute) {
-                return $interval;
-            }
-        }
-
-        return null;
     }
 }
