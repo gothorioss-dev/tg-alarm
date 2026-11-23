@@ -129,6 +129,6 @@ class ReminderTest extends TestCase
         $this->assertStringContainsString('Оберіть чергу', $texts[1]);
         $start(5);
         $this->assertStringContainsString('Довідник', $texts[0]);
-        $this->assertStringContainsString('Меню', $texts[2]);
+        $this->assertStringContainsString('Кнопки', $texts[2]);
     }
 }

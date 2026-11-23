@@ -10,7 +10,7 @@ use App\Schedule\Queues;
 final class UpdateHandler
 {
     /** Buttons of messages sent by earlier versions => current actions. */
-    private const LEGACY = ['schedule' => 'menu', 'buttons' => 'help', 'remind' => 'settings'];
+    private const LEGACY = ['menu' => 'schedule', 'buttons' => 'help', 'sources' => 'help', 'remind' => 'settings'];
 
     private const LEGACY_NEW_PREFIX = 'new:';
 
@@ -40,8 +40,8 @@ final class UpdateHandler
 
         $chat = $this->chat((int) $message['chat']['id']);
 
-        if ($text === Keyboards::MENU) {
-            $this->openMenu($chat);
+        if ($screen = Keyboards::screen($text)) {
+            $this->open($chat, $screen);
             $this->delete($chat, (int) $message['message_id']);
 
             return;
@@ -55,9 +55,9 @@ final class UpdateHandler
             $chat->update(['active' => true]);
         }
 
-        // The bottom button may be missing, so it is sent again before the menu.
+        // The bottom keyboard may be missing or outdated, so it is sent again.
         $this->telegram->send($chat->telegram_id, $this->messages->menuHint(), ['reply_markup' => Keyboards::bottom()]);
-        $this->openMenu($chat);
+        $this->open($chat, 'schedule');
     }
 
     /** @param array<string, mixed> $query */
@@ -75,7 +75,7 @@ final class UpdateHandler
 
         if (str_starts_with($data, self::LEGACY_NEW_PREFIX)) {
             $this->answer($query['id']);
-            $this->openMenu($chat);
+            $this->open($chat, 'schedule');
 
             return;
         }
@@ -94,7 +94,7 @@ final class UpdateHandler
             $data = 'settings';
         } elseif ($data === 'done') {
             if ($chat->subscriptions()->exists()) {
-                $data = 'menu';
+                $data = 'schedule';
             } else {
                 [$toast, $alert, $data] = [$this->messages->nothingSelected(), true, ''];
             }
@@ -102,14 +102,9 @@ final class UpdateHandler
 
         $this->answer($query['id'], $toast, $alert);
 
-        match ($data) {
-            'menu' => $this->showMenu($chat, $messageId),
-            'queue' => $this->showQueues($chat, $messageId),
-            'settings' => $this->render($chat, $this->messages->settings($chat->active, $chat->remind_minutes), Keyboards::settings($chat), $messageId),
-            'help' => $this->render($chat, $this->messages->guide(), null, $messageId),
-            'sources' => $this->render($chat, $this->messages->sources(), null, $messageId),
-            default => null,
-        };
+        if (in_array($data, ['schedule', 'queue', 'settings', 'help'], true)) {
+            $this->show($chat, $data, $messageId);
+        }
     }
 
     /** @param array<string, mixed> $member */
@@ -124,35 +119,37 @@ final class UpdateHandler
         }
     }
 
-    /** First contact: the guide brings the bottom button, the selection follows at once. */
+    /** First contact: the guide brings the bottom keyboard, the selection follows at once. */
     private function welcome(Chat $chat): void
     {
         $chat->update(['active' => true]);
         $this->telegram->send($chat->telegram_id, $this->messages->guide(), ['reply_markup' => Keyboards::bottom()]);
-        $this->replaceMenu($chat, fn () => $this->showQueues($chat));
+        $this->open($chat, 'queue');
     }
 
-    private function openMenu(Chat $chat): void
-    {
-        $this->replaceMenu($chat, fn () => $this->showMenu($chat));
-    }
-
-    /**
-     * Keeps a single menu in the chat, always at the bottom.
-     *
-     * @param  callable(): int  $show  sends the menu and returns its message id
-     */
-    private function replaceMenu(Chat $chat, callable $show): void
+    /** Keeps a single screen in the chat, always at the bottom. */
+    private function open(Chat $chat, string $screen): void
     {
         $previous = $chat->menu_message_id;
-        $chat->update(['menu_message_id' => $show()]);
+        $chat->update(['menu_message_id' => $this->show($chat, $screen)]);
 
         if ($previous !== null) {
             $this->delete($chat, $previous);
         }
     }
 
-    private function showMenu(Chat $chat, ?int $messageId = null): int
+    /** @return int id of the shown message */
+    private function show(Chat $chat, string $screen, ?int $messageId = null): int
+    {
+        return match ($screen) {
+            'schedule' => $this->showSchedule($chat, $messageId),
+            'queue' => $this->showQueues($chat, $messageId),
+            'settings' => $this->render($chat, $this->messages->settings($chat->active, $chat->remind_minutes), Keyboards::settings($chat), $messageId),
+            'help' => $this->render($chat, $this->messages->guide(), null, $messageId),
+        };
+    }
+
+    private function showSchedule(Chat $chat, ?int $messageId = null): int
     {
         $queues = $chat->subscriptions()->pluck('queue')->all();
 
@@ -164,7 +161,7 @@ final class UpdateHandler
         $checkedAt = SourceState::query()->max('succeeded_at');
         $text = $this->messages->currentSchedule(OutageTimeline::load(), $queues, $chat->active, $checkedAt);
 
-        return $this->render($chat, $text, Keyboards::menu(), $messageId);
+        return $this->render($chat, $text, null, $messageId);
     }
 
     private function showQueues(Chat $chat, ?int $messageId = null): int

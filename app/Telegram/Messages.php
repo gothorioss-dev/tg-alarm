@@ -54,7 +54,7 @@ final class Messages
     public function currentSchedule(OutageTimeline $timeline, array $queues, bool $active = true, ?string $checkedAt = null): string
     {
         if ($queues === []) {
-            return 'Черги ще не обрано. Оберіть їх у меню.';
+            return 'Черги ще не обрано.';
         }
 
         $footer = $checkedAt === null ? '' : "\n\n<i>Дані перевірено о ".CarbonImmutable::parse($checkedAt, 'UTC')->setTimezone(config('telegram.timezone'))->format('H:i, d.m').'</i>';
@@ -94,17 +94,17 @@ final class Messages
     {
         return "📖 <b>Довідник</b>\n\n"
             ."Позначте свою чергу (можна кілька) і натисніть «💾 Готово». Далі я сам повідомлятиму про новий графік, зміни для ваших черг та аварійні відключення.\n\n"
-            ."☰ <b>Меню</b> (внизу) — графік і всі кнопки\n"
-            ."⚡ <b>Змінити / додати чергу</b> — повторне натискання на чергу прибирає її\n"
-            ."⚙️ <b>Налаштування</b> — сповіщення та нагадування перед відключенням\n"
-            ."🔗 <b>Джерела</b> — звідки беруться дані\n\n"
-            ."Це неофіційний бот, фактичні відключення можуть відрізнятися. Джерела:\n"
+            ."Кнопки внизу:\n"
+            ."📅 <b>Графік</b> — стан зараз і відключення на сьогодні та завтра\n"
+            ."⚡ <b>Мої черги</b> — додати чергу; повторне натискання прибирає її\n"
+            ."⚙️ <b>Налаштування</b> — сповіщення та нагадування перед відключенням\n\n"
+            ."Це неофіційний бот, фактичні відключення можуть відрізнятися. Джерела (якщо розходяться, перевага за верхнім):\n"
             .$this->sourceLinks();
     }
 
     public function menuHint(): string
     {
-        return 'Кнопка «☰ Меню» — внизу 👇';
+        return 'Кнопки — внизу 👇';
     }
 
     public function date(string $date): string
@@ -192,12 +192,6 @@ final class Messages
     private function footer(string $source, string $url): string
     {
         return "\n\n<a href=\"".e($url).'">Джерело: '.e($this->sources->label($source)).'</a>';
-    }
-
-    public function sources(): string
-    {
-        return "🔗 <b>Джерела даних</b>\n\n".$this->sourceLinks()."\n\n"
-            .'Якщо джерела розходяться, перевага за тим, що вище у списку.';
     }
 
     /** Enabled sources, the most trusted first. */

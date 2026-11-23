@@ -8,26 +8,43 @@ use App\Schedule\Queues;
 /** Keyboards of the bot screens. */
 final class Keyboards
 {
-    public const MENU = '☰ Меню';
+    public const SCHEDULE = '📅 Графік';
+
+    public const QUEUES = '⚡ Мої черги';
+
+    public const SETTINGS = '⚙️ Налаштування';
+
+    public const GUIDE = '📖 Довідник';
 
     /**
-     * The only bottom button. A message carries either this or inline buttons.
+     * Main menu. A message carries either this or inline buttons.
      *
      * @return array<string, mixed>
      */
     public static function bottom(): array
     {
-        return ['keyboard' => [[['text' => self::MENU]]], 'resize_keyboard' => true];
+        return [
+            'keyboard' => [
+                [['text' => self::SCHEDULE], ['text' => self::QUEUES]],
+                [['text' => self::SETTINGS], ['text' => self::GUIDE]],
+            ],
+            'resize_keyboard' => true,
+        ];
     }
 
-    /** @return array<string, mixed> */
-    public static function menu(): array
+    /** Screen opened by a bottom button, null for any other text. */
+    public static function screen(string $text): ?string
     {
-        return ['inline_keyboard' => [
-            [self::inline('⚡ Змінити / додати чергу', 'queue')],
-            [self::inline('⚙️ Налаштування', 'settings')],
-            [self::inline('📖 Довідник', 'help'), self::inline('🔗 Джерела', 'sources')],
-        ]];
+        // Clients may drop the emoji variation selector.
+        $plain = fn (string $value) => str_replace("\u{FE0F}", '', $value);
+
+        return match ($plain($text)) {
+            $plain(self::SCHEDULE) => 'schedule',
+            $plain(self::QUEUES) => 'queue',
+            $plain(self::SETTINGS) => 'settings',
+            $plain(self::GUIDE) => 'help',
+            default => null,
+        };
     }
 
     /** @return array<string, mixed> */
