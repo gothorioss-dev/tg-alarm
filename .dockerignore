@@ -1,0 +1,9 @@
+.git
+.idea
+.env
+.env.*
+docs
+vendor
+tests
+database/*.sqlite*
+storage/logs/*

@@ -1,0 +1,40 @@
+x-app: &app
+  build:
+    context: .
+    target: production
+  image: zoe-alarm
+  env_file: .env
+  volumes:
+    - data:/data
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+
+services:
+  migrate:
+    <<: *app
+    command: sh -c "touch /data/database.sqlite && php artisan migrate --force"
+    restart: "no"
+
+  # Polls the sources and delivers queued notifications.
+  worker:
+    <<: *app
+    command: php artisan app:worker
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # Handles user commands via long polling.
+  bot:
+    <<: *app
+    command: php artisan app:bot
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  data:
