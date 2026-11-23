@@ -84,7 +84,6 @@ final class Messages
             if ($next !== []) {
                 $parts[] = "⏰ <b>Наступне за графіком</b>\n".implode("\n", $next);
             }
-            $parts[] = '<i>'.$this->disclaimer().'</i>';
         }
         if ($checkedAt !== null) {
             $parts[] = '<i>Дані перевірено о '.CarbonImmutable::parse($checkedAt, 'UTC')->setTimezone(config('telegram.timezone'))->format('H:i, d.m').'</i>';
@@ -120,9 +119,7 @@ final class Messages
             ."⚡ <b>Мої черги</b> — додати або прибрати чергу\n"
             ."⚙️ <b>Налаштування</b> — сповіщення та нагадування перед відключенням\n"
             ."📖 <b>Довідник</b> — ця підказка\n\n"
-            ."❗ <b>Важливо</b>\n"
-            .$this->disclaimer()." Бот не знає, чи є світло саме у вас.\n\n"
-            ."Бот неофіційний. Джерела (якщо розходяться, перевага за верхнім):\n"
+            ."Бот неофіційний і не знає, чи є світло саме у вас. Джерела (якщо розходяться, перевага за верхнім):\n"
             .$this->sourceLinks();
     }
 
@@ -206,11 +203,6 @@ final class Messages
 
             return '• '.str_replace('–', ' до ', "з {$interval}").$note;
         }, $intervals));
-    }
-
-    private function disclaimer(): string
-    {
-        return 'Це лише графік. Насправді світло можуть вимкнути або увімкнути в інший час.';
     }
 
     /** Midnight right after the reference day is shown as 24:00, as in the source. */
