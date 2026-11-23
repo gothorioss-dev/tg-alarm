@@ -26,9 +26,16 @@ final class Messages
     }
 
     /** @param array<string, ChangeImpact> $impacts by queue */
-    public function changedSchedule(string $date, DaySchedule $new, array $impacts, bool $correction, string $source, string $url): string
+    public function changedSchedule(string $date, DaySchedule $new, array $impacts, bool $correction, string $source, string $url, CarbonImmutable $publishedAt): string
     {
         $title = $correction ? "⚠️ <b>Графік на {$this->date($date)} уточнено</b>" : "🔄 <b>Графік на {$this->date($date)} змінено</b>";
+        $publishedAt = $publishedAt->setTimezone(config('telegram.timezone'));
+        $published = $publishedAt->format('H:i');
+        $minute = $publishedAt->format('Y-m-d') === $date ? $publishedAt->hour * 60 + $publishedAt->minute : null;
+        $late = array_filter($impacts, fn (ChangeImpact $impact) => $impact->startedBy($minute));
+        $title .= $late === []
+            ? "\nОпубліковано о {$published}"
+            : "\n❗ <b>Зміну опубліковано із запізненням, о {$published}</b>";
         $blocks = [];
 
         foreach ($impacts as $queue => $impact) {

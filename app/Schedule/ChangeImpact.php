@@ -2,7 +2,7 @@
 
 namespace App\Schedule;
 
-/** What a schedule change of one queue changes, and whether it is still relevant. */
+/** What a schedule change of one queue changes, relative to the current minute of the day. */
 final readonly class ChangeImpact
 {
     /** @var list<Interval> */
@@ -22,15 +22,15 @@ final readonly class ChangeImpact
         $this->removed = DaySchedule::subtract($old, $new);
     }
 
-    /** Every changed part is already over, so nothing can be done about it. */
-    public function isPast(): bool
+    /** A changed part had already started by the given minute of the day. */
+    public function startedBy(?int $minute): bool
     {
         foreach ([...$this->added, ...$this->removed] as $interval) {
-            if ($this->minute === null || $interval->to > $this->minute) {
-                return false;
+            if ($minute !== null && $interval->from <= $minute) {
+                return true;
             }
         }
 
-        return true;
+        return false;
     }
 }

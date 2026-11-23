@@ -233,6 +233,7 @@ final class Ingestor
                 $current->publication_id,
                 $current->source,
                 $current->publication->url,
+                $current->publication->published_at,
             );
         }
     }

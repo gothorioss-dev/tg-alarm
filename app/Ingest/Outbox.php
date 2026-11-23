@@ -16,7 +16,7 @@ final class Outbox
 {
     public function __construct(private Messages $messages) {}
 
-    public function schedule(string $date, ?DaySchedule $old, DaySchedule $new, bool $correction, int $publicationId, string $source, string $url): void
+    public function schedule(string $date, ?DaySchedule $old, DaySchedule $new, bool $correction, int $publicationId, string $source, string $url, CarbonImmutable $publishedAt): void
     {
         $changed = $old ? $new->changedQueues($old) : null;
         $now = CarbonImmutable::now(config('telegram.timezone'));
@@ -27,14 +27,9 @@ final class Outbox
             $impacts[$queue] = new ChangeImpact($old->intervals($queue), $new->intervals($queue), $minute);
         }
 
-        // Changes of the time that is already over are not worth a message.
-        if ($changed !== null && ! config('sources.notify_past_changes')) {
-            $changed = array_values(array_filter($changed, fn (string $queue) => ! $impacts[$queue]->isPast()));
-        }
-
         $expires = CarbonImmutable::parse($date, config('telegram.timezone'))->addDay()->utc();
 
-        $this->eachChat(function (Chat $chat, array $queues) use ($date, $old, $new, $correction, $publicationId, $source, $url, $changed, $impacts, $expires) {
+        $this->eachChat(function (Chat $chat, array $queues) use ($date, $old, $new, $correction, $publicationId, $source, $url, $publishedAt, $changed, $impacts, $expires) {
             $queues = $changed === null ? $queues : array_values(array_intersect($queues, $changed));
 
             if ($queues === []) {
@@ -43,7 +38,7 @@ final class Outbox
 
             $text = $old === null
                 ? $this->messages->newSchedule($date, $new, $queues, $source, $url)
-                : $this->messages->changedSchedule($date, $new, array_intersect_key($impacts, array_flip($queues)), $correction, $source, $url);
+                : $this->messages->changedSchedule($date, $new, array_intersect_key($impacts, array_flip($queues)), $correction, $source, $url, $publishedAt);
 
             $this->push($chat->telegram_id, "schedule:{$date}:{$publicationId}:{$chat->id}", $text, $expires);
         });

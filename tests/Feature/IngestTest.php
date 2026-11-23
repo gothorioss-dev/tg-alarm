@@ -193,18 +193,47 @@ class IngestTest extends TestCase
         $this->travelTo(CarbonImmutable::parse("2026-11-23 {$time}", 'Europe/Kyiv'));
     }
 
-    public function test_change_of_past_time_only_is_silent_but_stored(): void
+    public function test_change_of_past_time_only_is_still_reported(): void
     {
         $this->atTime('15:00');
         $this->version('site', '09:00', $this->rows('10:30 – 13:30'), '08:57');
         $this->version('site', '14:50', $this->rows('10:30 – 12:30'), '14:47');
 
-        $this->assertCount(1, $this->sent(1));
-        $this->assertSame(['10:30–12:30'], array_map('strval', Schedule::query()->first()->day()->intervals('5.2')));
+        $this->assertCount(2, $this->sent(1));
+        $this->assertStringContainsString('з 12:30 до 13:30 (цей час уже минув)', $this->sent(1)[1]);
+        $this->assertStringContainsString('із запізненням, о 14:50', $this->sent(1)[1]);
+    }
 
-        config(['sources.notify_past_changes' => true]);
-        $this->version('site', '14:55', $this->rows('10:30 – 13:00'), '14:52');
-        $this->assertStringContainsString('цей час уже минув', $this->sent(1)[1]);
+    public function test_outage_published_fifteen_minutes_after_its_start_is_sent_at_once(): void
+    {
+        $this->atTime('10:45');
+        $this->version('telegram', '09:00', $this->rows('17:00 - 22:00'));
+        $this->version('telegram', '10:45', $this->rows('10:30 - 13:30, 17:00 - 22:00'));
+
+        $text = $this->sent(1)[1];
+        $this->assertStringContainsString('Зміну опубліковано із запізненням, о 10:45', $text);
+        $this->assertStringContainsString('з 10:30 до 13:30 (цей час уже почався)', $text);
+        $this->assertCount(1, $this->sent(2));
+    }
+
+    public function test_late_mark_depends_on_publication_and_not_on_polling(): void
+    {
+        $this->atTime('10:31');
+        $this->version('telegram', '09:00', $this->rows('17:00 - 22:00'));
+        $this->version('telegram', '10:29', $this->rows('10:30 - 13:30, 17:00 - 22:00'));
+
+        $this->assertStringContainsString('Опубліковано о 10:29', $this->sent(1)[1]);
+        $this->assertStringContainsString('(цей час уже почався)', $this->sent(1)[1]);
+    }
+
+    public function test_timely_change_has_no_late_mark(): void
+    {
+        $this->atTime('11:00');
+        $this->version('site', '09:00', $this->rows('17:00 – 22:00'), '08:57');
+        $this->version('site', '10:55', $this->rows('18:00 – 22:00'), '10:53');
+
+        $this->assertStringContainsString('Опубліковано о 10:55', $this->sent(1)[1]);
+        $this->assertStringNotContainsString('запізненням', $this->sent(1)[1]);
     }
 
     public function test_outage_added_after_its_start_is_marked(): void
