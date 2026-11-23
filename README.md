@@ -12,9 +12,24 @@ docker compose logs -f worker bot
 
 Домен, HTTPS и открытые порты не нужны (long polling). Администратор должен один раз написать боту `/start`, иначе Telegram не доставит служебные сообщения. С одним токеном может работать только одна копия бота.
 
-Обновление: доставить новый код и снова выполнить `docker compose up -d --build`. Миграции применяются автоматически.
+Обновление: автоматически после push или merge в `main` (см. «CI/CD»).
 
 Бэкап БД: `docker compose stop && docker compose cp worker:/data/. ./backup && docker compose start worker bot`
+
+## CI/CD
+
+`.github/workflows/deploy.yml`: тесты, стиль и сборка образа; при успехе в `main` сервер разворачивает этот коммит.
+
+- Ключ CI ограничен forced command `/usr/local/sbin/zoe-alarm-deploy` и разворачивает только коммиты из `main`.
+- Порядок (`deploy/deploy.sh`): сборка, копия базы в `/opt/zoe-alarm-backups` (последние 5), миграции, запуск, проверка.
+- При ошибке возвращается прежний образ, база назад не откатывается: миграции должны быть совместимы с предыдущей версией.
+- Результат приходит администратору в Telegram.
+- Откат версии: `git revert` и push.
+
+Секреты GitHub Actions: `DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS`, `DEPLOY_HOST`.
+
+Установка на сервере: `install -m 755 deploy/zoe-alarm-deploy /usr/local/sbin/`, в `authorized_keys`:
+`restrict,command="/usr/local/sbin/zoe-alarm-deploy" ssh-ed25519 …`
 
 ## Источники
 

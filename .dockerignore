@@ -7,3 +7,5 @@ vendor
 tests
 database/*.sqlite*
 storage/logs/*
+.github
+deploy
