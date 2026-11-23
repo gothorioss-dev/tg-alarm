@@ -153,9 +153,9 @@ final class Messages
         return 'Графік відключень світла у Запорізькій області: зміни та нагадування для вашої черги. Неофіційний бот.';
     }
 
-    public function menuHint(): string
+    public function menuUpdated(): string
     {
-        return 'Кнопки — внизу 👇';
+        return 'Кнопки внизу оновлено 👇';
     }
 
     public function date(string $date): string

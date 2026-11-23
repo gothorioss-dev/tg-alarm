@@ -44,6 +44,7 @@ final class DeliverySender
 
         try {
             $this->telegram->send($delivery->telegram_id, $delivery->text, ['reply_markup' => Keyboards::bottom()]);
+            $chat?->update(['keyboard_version' => Keyboards::version()]);
             $delivery->update(['status' => Delivery::SENT, 'sent_at' => now(), 'error' => null]);
 
             return true;

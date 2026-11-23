@@ -42,7 +42,13 @@ final class UpdateHandler
 
         $chat = $this->chat((int) $message['chat']['id']);
 
+        if (preg_match('/^\/start(\s|$)/', $text)) {
+            $this->welcome($chat);
+
+            return;
+        }
         if ($screen = Keyboards::screen($text)) {
+            $this->updateKeyboard($chat, $screen);
             $this->open($chat, $screen);
             $this->delete($chat, (int) $message['message_id']);
 
@@ -53,12 +59,7 @@ final class UpdateHandler
 
             return;
         }
-        if (preg_match('/^\/start(\s|$)/', $text)) {
-            $chat->update(['active' => true]);
-        }
 
-        // The bottom keyboard may be missing or outdated, so it is sent again.
-        $this->telegram->send($chat->telegram_id, $this->messages->menuHint(), ['reply_markup' => Keyboards::bottom()]);
         $this->open($chat, 'schedule');
     }
 
@@ -120,18 +121,42 @@ final class UpdateHandler
         $chatId = (int) $member['chat']['id'];
 
         if (in_array($member['new_chat_member']['status'], ['kicked', 'left'], true)) {
-            Chat::query()->where('telegram_id', $chatId)->update(['active' => false]);
+            Chat::query()->where('telegram_id', $chatId)->update([
+                'active' => false,
+                'keyboard_version' => null,
+                'menu_message_id' => null,
+            ]);
         } elseif ($member['chat']['type'] !== 'private') {
             $this->telegram->call('leaveChat', ['chat_id' => $chatId]);
         }
     }
 
-    /** First contact: the guide brings the bottom keyboard, the selection follows at once. */
+    /** Every start shows the guide with the bottom keyboard; saved queues are kept. */
     private function welcome(Chat $chat): void
     {
         $chat->update(['active' => true]);
-        $this->telegram->send($chat->telegram_id, $this->messages->guide(), ['reply_markup' => Keyboards::bottom()]);
-        $this->open($chat, 'queue');
+        $this->sendWithKeyboard($chat, $this->messages->guide());
+        $this->open($chat, $chat->subscriptions()->exists() ? 'schedule' : 'queue');
+    }
+
+    /** Replaces an outdated bottom keyboard; a schedule brings the keyboard itself. */
+    private function updateKeyboard(Chat $chat, string $screen): void
+    {
+        if ($chat->keyboard_version === Keyboards::version()
+            || ($screen === 'schedule' && $chat->subscriptions()->exists())) {
+            return;
+        }
+
+        $this->sendWithKeyboard($chat, $this->messages->menuUpdated());
+    }
+
+    /** The message must stay in the chat: some clients drop the keyboard together with it. */
+    private function sendWithKeyboard(Chat $chat, string $text): int
+    {
+        $sent = $this->telegram->send($chat->telegram_id, $text, ['reply_markup' => Keyboards::bottom()]);
+        $chat->update(['keyboard_version' => Keyboards::version()]);
+
+        return (int) ($sent['message_id'] ?? 0);
     }
 
     /** Replaces the previous service screen; schedules stay in the chat. */
@@ -182,7 +207,9 @@ final class UpdateHandler
         $checkedAt = SourceState::query()->max('succeeded_at');
         $text = $this->messages->currentSchedule(OutageTimeline::load(), $queues, $chat->active, $checkedAt);
 
-        return $this->render($chat, $text, null, $messageId);
+        return $messageId === null
+            ? $this->sendWithKeyboard($chat, $text)
+            : $this->render($chat, $text, null, $messageId);
     }
 
     private function showQueues(Chat $chat, ?int $messageId = null): int

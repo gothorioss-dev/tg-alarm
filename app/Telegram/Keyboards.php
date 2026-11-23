@@ -35,6 +35,12 @@ final class Keyboards
         ];
     }
 
+    /** Changes together with the bottom keyboard. */
+    public static function version(): string
+    {
+        return substr(hash('sha256', json_encode(self::bottom(), JSON_THROW_ON_ERROR)), 0, 8);
+    }
+
     /** Screen opened by a bottom button, null for any other text. */
     public static function screen(string $text): ?string
     {

@@ -135,7 +135,7 @@ class BotTest extends TestCase
         Http::fake(function ($r) use (&$next) {
             return Http::response(['ok' => true, 'result' => str_ends_with($r->url(), 'sendMessage') ? ['message_id' => $next++] : true]);
         });
-        $chat = Chat::query()->create(['telegram_id' => 5, 'type' => 'private', 'menu_message_id' => 40]);
+        $chat = Chat::query()->create(['telegram_id' => 5, 'type' => 'private', 'menu_message_id' => 40, 'keyboard_version' => Keyboards::version()]);
         $chat->subscriptions()->create(['queue' => '1.1']);
 
         $this->update($this->message(Keyboards::SCHEDULE)); // 60
@@ -155,8 +155,6 @@ class BotTest extends TestCase
         $this->update($this->message(Keyboards::GUIDE)); // 63
         $this->assertDeleted(62, false);
         $this->assertSame(63, $chat->refresh()->menu_message_id);
-
-        Http::assertNotSent(fn ($r) => isset($r['reply_markup']['keyboard']));
     }
 
     public function test_other_text_restores_the_bottom_keyboard_and_old_buttons_still_work(): void
@@ -187,7 +185,6 @@ class BotTest extends TestCase
         Http::assertSent(fn ($r) => $this->hasButton($r, 'q:1.1'));
         Http::assertSent(fn ($r) => $this->hasButton($r, 'r:30'));
         Http::assertSent(fn ($r) => str_contains($r['text'] ?? '', 'Довідник'));
-        Http::assertNotSent(fn ($r) => isset($r['reply_markup']['keyboard']));
     }
 
     public function test_invite_shares_the_bot_link_with_a_ready_text(): void
@@ -221,6 +218,47 @@ class BotTest extends TestCase
         $messages = app(Messages::class);
         $this->assertLessThanOrEqual(512, mb_strlen($messages->description()));
         $this->assertLessThanOrEqual(120, mb_strlen($messages->shortDescription()));
+    }
+
+    private function keyboardMessages(): int
+    {
+        return Http::recorded(fn ($r) => isset($r['reply_markup']['keyboard']))->count();
+    }
+
+    public function test_outdated_keyboard_is_replaced_once_on_any_button(): void
+    {
+        $this->fake();
+        $chat = Chat::query()->create(['telegram_id' => 5, 'type' => 'private', 'keyboard_version' => 'old']);
+        $chat->subscriptions()->create(['queue' => '1.1']);
+        $this->update($this->message(Keyboards::SETTINGS));
+        $this->assertSame(1, $this->keyboardMessages());
+        $this->update($this->message(Keyboards::GUIDE));
+        $this->assertSame(1, $this->keyboardMessages());
+        $this->assertSame(Keyboards::version(), $chat->refresh()->keyboard_version);
+
+        // A schedule carries the keyboard, so no extra message is needed.
+        $chat->update(['keyboard_version' => 'old']);
+        $this->update($this->message(Keyboards::SCHEDULE));
+        $this->assertSame(2, $this->keyboardMessages());
+        Http::assertSentCount(9);
+    }
+
+    public function test_every_start_shows_the_guide_and_keeps_queues(): void
+    {
+        $this->fake();
+        $chat = Chat::query()->create(['telegram_id' => 5, 'type' => 'private']);
+        $chat->subscriptions()->create(['queue' => '5.2']);
+        $this->update(['my_chat_member' => ['chat' => ['id' => 5, 'type' => 'private'], 'new_chat_member' => ['status' => 'kicked']]]);
+        $this->assertFalse($chat->refresh()->active);
+
+        for ($i = 1; $i <= 2; $i++) {
+            $this->update($this->message('/start'));
+            $this->assertCount($i, Http::recorded(fn ($r) => str_contains($r['text'] ?? '', 'Довідник') && isset($r['reply_markup']['keyboard'])));
+        }
+
+        $this->assertTrue($chat->refresh()->active);
+        $this->assertSame(['5.2'], $chat->subscriptions->pluck('queue')->all());
+        Http::assertNotSent(fn ($r) => str_contains($r['text'] ?? '', 'Оберіть чергу'));
     }
 
     private function delivery(): Delivery
