@@ -43,8 +43,7 @@ final class DeliverySender
         }
 
         try {
-            $isAdminAlert = str_starts_with($delivery->dedupe_key, 'admin:');
-            $this->telegram->send($delivery->telegram_id, $delivery->text, $isAdminAlert ? [] : ['reply_markup' => Keyboards::notification()]);
+            $this->telegram->send($delivery->telegram_id, $delivery->text, ['reply_markup' => Keyboards::bottom()]);
             $delivery->update(['status' => Delivery::SENT, 'sent_at' => now(), 'error' => null]);
 
             return true;

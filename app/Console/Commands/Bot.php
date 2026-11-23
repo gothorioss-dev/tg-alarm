@@ -24,10 +24,10 @@ class Bot extends Command
         });
 
         try {
-            $username = $telegram->call('getMe')['username'];
-            // The only command opens the menu; everything else is done with its buttons.
+            $telegram->call('getMe');
+            // The bottom button replaces commands; without them Telegram hides its own menu button.
+            $telegram->call('deleteMyCommands');
             $telegram->call('deleteMyCommands', ['scope' => ['type' => 'all_group_chats']]);
-            $telegram->call('setMyCommands', ['commands' => [['command' => 'menu', 'description' => 'Відкрити меню']]]);
         } catch (TelegramException $e) {
             $this->error($e->getMessage());
             Sleep::for(10)->seconds();
@@ -57,7 +57,7 @@ class Bot extends Command
                 $offset = $update['update_id'] + 1;
 
                 try {
-                    $handler->handle($update, $username);
+                    $handler->handle($update);
                 } catch (Throwable $e) {
                     Log::error("Update {$update['update_id']} failed: {$e->getMessage()}");
                 }

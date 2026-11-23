@@ -50,8 +50,8 @@ class ReminderTest extends TestCase
 
     private function press(string $data): string
     {
-        Http::fake(fn () => Http::response(['ok' => true, 'result' => true]));
-        app(UpdateHandler::class)->handle(['callback_query' => ['id' => 'x', 'data' => $data, 'from' => ['id' => 7], 'message' => ['message_id' => 1, 'chat' => ['id' => 5, 'type' => 'private']]]], 'bot');
+        Http::fake(fn () => Http::response(['ok' => true, 'result' => ['message_id' => 60]]));
+        app(UpdateHandler::class)->handle(['callback_query' => ['id' => 'x', 'data' => $data, 'from' => ['id' => 7], 'message' => ['message_id' => 1, 'chat' => ['id' => 5, 'type' => 'private']]]]);
 
         return (string) Http::recorded()->map(fn ($pair) => $pair[0])->filter(fn ($r) => str_ends_with($r->url(), 'editMessageText'))->last()?->data()['text'];
     }
@@ -122,12 +122,13 @@ class ReminderTest extends TestCase
         Http::fake(function ($r) use (&$texts) {
             $texts[] = $r['text'] ?? '';
 
-            return Http::response(['ok' => true, 'result' => true]);
+            return Http::response(['ok' => true, 'result' => ['message_id' => 60]]);
         });
-        $start = fn (int $id) => app(UpdateHandler::class)->handle(['message' => ['text' => '/start', 'chat' => ['id' => $id, 'type' => 'private'], 'from' => ['id' => $id]]], 'bot');
+        $start = fn (int $id) => app(UpdateHandler::class)->handle(['message' => ['message_id' => 50, 'text' => '/start', 'chat' => ['id' => $id, 'type' => 'private'], 'from' => ['id' => $id]]]);
         $start(77);
+        $this->assertStringContainsString('Оберіть чергу', $texts[1]);
         $start(5);
-        $this->assertStringContainsString('Як почати', $texts[0]);
-        $this->assertStringContainsString('Меню', $texts[1]);
+        $this->assertStringContainsString('Довідник', $texts[0]);
+        $this->assertStringContainsString('Меню', $texts[2]);
     }
 }

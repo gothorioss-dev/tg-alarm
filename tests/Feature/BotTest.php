@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\Chat;
 use App\Models\Delivery;
 use App\Telegram\DeliverySender;
+use App\Telegram\Keyboards;
 use App\Telegram\Messages;
 use App\Telegram\TelegramClient;
 use App\Telegram\TelegramException;
@@ -20,17 +21,17 @@ class BotTest extends TestCase
 
     private function fake(): void
     {
-        Http::fake(fn () => Http::response(['ok' => true, 'result' => true]));
+        Http::fake(fn () => Http::response(['ok' => true, 'result' => ['message_id' => 60]]));
     }
 
     private function update(array $update): void
     {
-        app(UpdateHandler::class)->handle($update, 'zoe_bot');
+        app(UpdateHandler::class)->handle($update);
     }
 
     private function message(string $text, string $type = 'private', int $id = 5, array $extra = []): array
     {
-        return ['message' => ['text' => $text, 'chat' => ['id' => $id, 'type' => $type], 'from' => ['id' => 7], ...$extra]];
+        return ['message' => ['message_id' => 50, 'text' => $text, 'chat' => ['id' => $id, 'type' => $type], 'from' => ['id' => 7], ...$extra]];
     }
 
     private function press(string $data, string $type = 'private', int $id = 5): array
@@ -42,7 +43,6 @@ class BotTest extends TestCase
     {
         $this->fake();
         $this->update($this->message('/start'));
-        $this->update($this->press('queue'));
         Http::assertSent(fn ($r) => str_contains($r['text'] ?? '', '<a href="https://www.zoe.com.ua/outage/">'));
         foreach (['q:1.1', 'q:5.2', 'q:1.1', 'q:6.1', 'q:9.9'] as $data) {
             $this->update($this->press($data));
@@ -51,16 +51,10 @@ class BotTest extends TestCase
         $this->assertSame(['5.2', '6.1'], $chat->subscriptions->pluck('queue')->all());
 
         $this->update($this->press('done'));
-        $this->update($this->message('/schedule'));
-        $this->update($this->message('/stop'));
+        $this->update($this->press('stop'));
         $this->assertFalse($chat->refresh()->active);
-    }
-
-    public function test_commands_for_other_bots_are_ignored(): void
-    {
-        $this->fake();
-        $this->update($this->message('/start@other_bot', 'group', -5));
-        Http::assertNothingSent();
+        $this->update($this->message('/start'));
+        $this->assertTrue($chat->refresh()->active);
     }
 
     private function hasButton($request, string $data): bool
@@ -68,7 +62,7 @@ class BotTest extends TestCase
         return in_array($data, array_column(array_merge(...($request['reply_markup']['inline_keyboard'] ?? [[]])), 'callback_data'), true);
     }
 
-    public function test_menu_is_edited_in_place_and_toggles_notifications(): void
+    public function test_screens_are_edited_in_place_and_toggles_notifications(): void
     {
         $this->fake();
         $this->update($this->message('/start'));
@@ -88,18 +82,6 @@ class BotTest extends TestCase
         $this->update($this->press('enable'));
         $this->assertTrue($chat->refresh()->active);
         $this->assertSame(['5.2', '6.1'], $chat->subscriptions->pluck('queue')->all());
-    }
-
-    public function test_any_private_text_opens_menu_and_notification_button_sends_new_message(): void
-    {
-        $this->fake();
-        Chat::query()->create(['telegram_id' => 5, 'type' => 'private'])->subscriptions()->create(['queue' => '1.1']);
-        $this->update($this->message('привіт'));
-        Http::assertSent(fn ($r) => str_ends_with($r->url(), 'sendMessage') && $this->hasButton($r, 'queue'));
-
-        $this->update($this->press('new:schedule'));
-        Http::assertSent(fn ($r) => str_ends_with($r->url(), 'sendMessage') && $this->hasButton($r, 'menu'));
-        Http::assertNotSent(fn ($r) => str_ends_with($r->url(), 'editMessageText'));
     }
 
     public function test_repeated_tap_is_harmless(): void
@@ -139,6 +121,35 @@ class BotTest extends TestCase
 
         config(['sources.sources.telegram.enabled' => false]);
         $this->assertStringNotContainsString('t.me', $messages->sources());
+    }
+
+    public function test_menu_button_shows_schedule_and_keeps_a_single_menu(): void
+    {
+        $this->fake();
+        $chat = Chat::query()->create(['telegram_id' => 5, 'type' => 'private', 'menu_message_id' => 40]);
+        $chat->subscriptions()->create(['queue' => '1.1']);
+        $this->update($this->message(Keyboards::MENU));
+
+        $this->assertSame(60, $chat->refresh()->menu_message_id);
+        foreach ([40, 50] as $id) {
+            Http::assertSent(fn ($r) => str_ends_with($r->url(), 'deleteMessage') && $r['message_id'] === $id);
+        }
+        Http::assertSent(fn ($r) => str_ends_with($r->url(), 'sendMessage') && $this->hasButton($r, 'settings') && ! $this->hasButton($r, 'menu'));
+        Http::assertNotSent(fn ($r) => isset($r['reply_markup']['keyboard']));
+    }
+
+    public function test_other_text_restores_the_bottom_button_and_old_buttons_still_work(): void
+    {
+        $this->fake();
+        $chat = Chat::query()->create(['telegram_id' => 5, 'type' => 'private']);
+        $chat->subscriptions()->create(['queue' => '1.1']);
+        $this->update($this->message('привіт'));
+        Http::assertSent(fn ($r) => ($r['reply_markup']['keyboard'][0][0]['text'] ?? '') === Keyboards::MENU);
+
+        foreach (['schedule', 'menu', 'buttons', 'remind', 'new:schedule'] as $data) {
+            $this->update($this->press($data));
+        }
+        Http::assertSent(fn ($r) => str_ends_with($r->url(), 'editMessageText') && str_contains($r['text'], 'Довідник'));
     }
 
     private function delivery(): Delivery

@@ -5,17 +5,25 @@ namespace App\Telegram;
 use App\Models\Chat;
 use App\Schedule\Queues;
 
-/** Inline keyboards of the bot screens. */
+/** Keyboards of the bot screens. */
 final class Keyboards
 {
-    /** Opens the screen in a new message, so the notification above stays intact. */
-    public const NEW_PREFIX = 'new:';
+    public const MENU = '☰ Меню';
+
+    /**
+     * The only bottom button. A message carries either this or inline buttons.
+     *
+     * @return array<string, mixed>
+     */
+    public static function bottom(): array
+    {
+        return ['keyboard' => [[['text' => self::MENU]]], 'resize_keyboard' => true];
+    }
 
     /** @return array<string, mixed> */
     public static function menu(): array
     {
         return ['inline_keyboard' => [
-            [self::inline('📅 Графік', 'schedule')],
             [self::inline('⚡ Змінити / додати чергу', 'queue')],
             [self::inline('⚙️ Налаштування', 'settings')],
             [self::inline('📖 Довідник', 'help'), self::inline('🔗 Джерела', 'sources')],
@@ -23,38 +31,20 @@ final class Keyboards
     }
 
     /** @return array<string, mixed> */
-    public static function settings(Chat $chat, string $reminderLabel): array
-    {
-        return ['inline_keyboard' => [
-            [$chat->active
-                ? self::inline('🔕 Вимкнути сповіщення', 'stop')
-                : self::inline('🔔 Увімкнути сповіщення', 'enable')],
-            [self::inline("⏰ Нагадування: {$reminderLabel}", 'remind')],
-            [self::inline('☰ Меню', 'menu')],
-        ]];
-    }
-
-    /** @return array<string, mixed> */
-    public static function reminders(Chat $chat): array
+    public static function settings(Chat $chat): array
     {
         $mark = fn (bool $selected) => $selected ? '✅ ' : '';
-        $buttons = array_map(
-            fn (int $m) => self::inline($mark($chat->remind_minutes === $m)."за {$m} хв", "r:{$m}"),
+        $minutes = array_map(
+            fn (int $m) => self::inline($mark($chat->remind_minutes === $m)."{$m} хв", "r:{$m}"),
             config('telegram.remind_minutes'),
         );
 
         return ['inline_keyboard' => [
-            ...array_chunk($buttons, 2),
+            [$chat->active
+                ? self::inline('🔕 Вимкнути сповіщення', 'stop')
+                : self::inline('🔔 Увімкнути сповіщення', 'enable')],
+            $minutes,
             [self::inline($mark($chat->remind_minutes === null).'Не нагадувати', 'r:0')],
-            [self::inline('⬅️ Налаштування', 'settings')],
-        ]];
-    }
-
-    /** @return array<string, mixed> */
-    public static function guide(bool $hasQueues): array
-    {
-        return $hasQueues ? self::back() : ['inline_keyboard' => [
-            [self::inline('⚡ Обрати чергу', 'queue')],
         ]];
     }
 
@@ -68,27 +58,6 @@ final class Keyboards
         );
 
         return ['inline_keyboard' => [...array_chunk($buttons, 4), [self::inline('💾 Готово', 'done')]]];
-    }
-
-    /** @return array<string, mixed> */
-    public static function schedule(): array
-    {
-        return ['inline_keyboard' => [[self::inline('🔄 Оновити', 'schedule'), self::inline('☰ Меню', 'menu')]]];
-    }
-
-    /** @return array<string, mixed> */
-    public static function back(): array
-    {
-        return ['inline_keyboard' => [[self::inline('☰ Меню', 'menu')]]];
-    }
-
-    /** @return array<string, mixed> */
-    public static function notification(): array
-    {
-        return ['inline_keyboard' => [[
-            self::inline('📅 Графік', self::NEW_PREFIX.'schedule'),
-            self::inline('☰ Меню', self::NEW_PREFIX.'menu'),
-        ]]];
     }
 
     /** @return array{text: string, callback_data: string} */
