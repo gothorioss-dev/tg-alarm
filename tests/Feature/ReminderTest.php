@@ -116,6 +116,8 @@ class ReminderTest extends TestCase
         $this->at('18:00');
         $text = $this->press('schedule');
         $this->assertStringNotContainsString('зараз', mb_strtolower($text));
+        $this->assertStringNotContainsString('Це лише графік', $text);
+        $this->assertStringContainsString('Це лише графік', $this->press('help'));
     }
 
     public function test_first_start_shows_guide_then_menu(): void
