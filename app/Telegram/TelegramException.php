@@ -17,15 +17,10 @@ class TelegramException extends RuntimeException
         return (int) ($this->parameters['retry_after'] ?? 0);
     }
 
-    public function migratedTo(): ?int
-    {
-        return isset($this->parameters['migrate_to_chat_id']) ? (int) $this->parameters['migrate_to_chat_id'] : null;
-    }
-
     public function isChatGone(): bool
     {
         return $this->getCode() === 403
-            || ($this->getCode() === 400 && preg_match('/chat not found|not enough rights|CHAT_WRITE_FORBIDDEN|user is deactivated/i', $this->getMessage()));
+            || ($this->getCode() === 400 && preg_match('/chat not found|user is deactivated/i', $this->getMessage()));
     }
 
     public function isTemporary(): bool

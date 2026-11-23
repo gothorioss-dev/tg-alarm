@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\Chat;
 use App\Models\Delivery;
 use App\Telegram\DeliverySender;
+use App\Telegram\Messages;
 use App\Telegram\TelegramClient;
 use App\Telegram\TelegramException;
 use App\Telegram\UpdateHandler;
@@ -17,11 +18,9 @@ class BotTest extends TestCase
 {
     use RefreshDatabase;
 
-    private string $memberStatus = 'member';
-
     private function fake(): void
     {
-        Http::fake(fn ($request) => Http::response(['ok' => true, 'result' => str_ends_with($request->url(), 'getChatMember') ? ['status' => $this->memberStatus] : true]));
+        Http::fake(fn () => Http::response(['ok' => true, 'result' => true]));
     }
 
     private function update(array $update): void
@@ -55,27 +54,6 @@ class BotTest extends TestCase
         $this->update($this->message('/schedule'));
         $this->update($this->message('/stop'));
         $this->assertFalse($chat->refresh()->active);
-    }
-
-    public function test_group_settings_are_for_admins(): void
-    {
-        $this->fake();
-        $this->update($this->message('/queue', 'supergroup', -5));
-        $this->update($this->press('q:1.1', 'supergroup', -5));
-        $this->assertSame(0, Chat::query()->count());
-
-        $this->memberStatus = 'administrator';
-        $this->update($this->press('q:1.1', 'supergroup', -5));
-        $this->assertSame(1, Chat::query()->sole()->subscriptions()->count());
-    }
-
-    public function test_anonymous_group_admin_is_allowed_but_linked_channel_is_not(): void
-    {
-        $this->fake();
-        $this->update($this->message('/queue', 'supergroup', -5, ['sender_chat' => ['id' => -9]]));
-        $this->assertSame(0, Chat::query()->count());
-        $this->update($this->message('/queue', 'supergroup', -5, ['sender_chat' => ['id' => -5]]));
-        $this->assertSame(1, Chat::query()->count());
     }
 
     public function test_commands_for_other_bots_are_ignored(): void
@@ -124,25 +102,6 @@ class BotTest extends TestCase
         Http::assertNotSent(fn ($r) => str_ends_with($r->url(), 'editMessageText'));
     }
 
-    public function test_group_schedule_is_public_and_settings_are_not(): void
-    {
-        $this->fake();
-        $chat = Chat::query()->create(['telegram_id' => -5, 'type' => 'supergroup', 'active' => true]);
-        $chat->subscriptions()->create(['queue' => '1.1']);
-
-        $this->update($this->press('schedule', 'supergroup', -5));
-        Http::assertSent(fn ($r) => $this->hasButton($r, 'menu'));
-
-        foreach (['stop', 'new:stop', 'new:queue'] as $data) {
-            $this->update($this->press($data, 'supergroup', -5));
-        }
-        $this->assertTrue($chat->refresh()->active);
-
-        $this->memberStatus = 'creator';
-        $this->update($this->press('stop', 'supergroup', -5));
-        $this->assertFalse($chat->refresh()->active);
-    }
-
     public function test_repeated_tap_is_harmless(): void
     {
         Http::fake(fn ($request) => str_contains($request->url(), 'editMessage')
@@ -152,6 +111,34 @@ class BotTest extends TestCase
         $this->update($this->press('done'));
 
         $this->assertSame(1, Chat::query()->sole()->subscriptions()->count());
+    }
+
+    public function test_groups_are_left_and_ignored(): void
+    {
+        $this->fake();
+        $this->update($this->message('/start', 'supergroup', -5));
+        $this->update($this->press('q:1.1', 'supergroup', -5));
+        Http::assertNothingSent();
+
+        $this->update(['my_chat_member' => ['chat' => ['id' => -5, 'type' => 'supergroup'], 'old_chat_member' => ['status' => 'left'], 'new_chat_member' => ['status' => 'member']]]);
+        Http::assertSent(fn ($r) => str_ends_with($r->url(), 'leaveChat') && $r['chat_id'] === -5);
+        $this->assertSame(0, Chat::query()->count());
+    }
+
+    public function test_sources_screen_and_manual_link_to_enabled_sources(): void
+    {
+        config(['sources.sources.telegram.priority' => 200]);
+        $messages = app(Messages::class);
+
+        foreach ([$messages->sources(), $messages->manual()] as $text) {
+            $this->assertStringContainsString('<a href="https://www.zoe.com.ua/outage/">', $text);
+            $this->assertStringContainsString('<a href="https://t.me/zoe_alarm">', $text);
+            $this->assertStringNotContainsString('груп', $text);
+            $this->assertLessThan(strpos($text, 'zoe.com.ua'), strpos($text, 't.me'));
+        }
+
+        config(['sources.sources.telegram.enabled' => false]);
+        $this->assertStringNotContainsString('t.me', $messages->sources());
     }
 
     private function delivery(): Delivery
@@ -182,21 +169,6 @@ class BotTest extends TestCase
 
         $this->travel(31)->seconds();
         app(DeliverySender::class)->flush();
-        $this->assertSame(Delivery::SENT, $delivery->refresh()->status);
-    }
-
-    public function test_group_migration_keeps_subscriptions(): void
-    {
-        Http::fakeSequence()
-            ->push(['ok' => false, 'error_code' => 400, 'description' => 'upgraded', 'parameters' => ['migrate_to_chat_id' => -100]], 400)
-            ->push(['ok' => true, 'result' => []]);
-        $chat = Chat::query()->create(['telegram_id' => 5, 'type' => 'group']);
-        $chat->subscriptions()->create(['queue' => '1.1']);
-        $delivery = $this->delivery();
-        app(DeliverySender::class)->flush();
-        app(DeliverySender::class)->flush();
-
-        $this->assertSame(-100, $chat->refresh()->telegram_id);
         $this->assertSame(Delivery::SENT, $delivery->refresh()->status);
     }
 

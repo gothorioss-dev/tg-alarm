@@ -9,10 +9,7 @@ use App\Schedule\Queues;
 
 final class UpdateHandler
 {
-    /** Actions that only show information and are open to every group member. */
-    private const PUBLIC_ACTIONS = ['schedule', 'help', 'menu', 'buttons'];
-
-    private const ACTIONS = ['start', 'queue', 'schedule', 'stop', 'enable', 'help', 'menu', 'buttons', 'settings', 'remind'];
+    private const ACTIONS = ['start', 'queue', 'schedule', 'stop', 'enable', 'help', 'menu', 'buttons', 'settings', 'remind', 'sources'];
 
     public function __construct(private TelegramClient $telegram, private Messages $messages) {}
 
@@ -32,11 +29,9 @@ final class UpdateHandler
     private function message(array $message, string $botUsername): void
     {
         $chat = $message['chat'];
-        $private = $chat['type'] === 'private';
 
-        if (isset($message['migrate_to_chat_id'])) {
-            ChatMigrator::migrate((int) $chat['id'], (int) $message['migrate_to_chat_id']);
-
+        // Only private chats are supported.
+        if ($chat['type'] !== 'private') {
             return;
         }
 
@@ -50,18 +45,11 @@ final class UpdateHandler
             $action = strtolower($match[1]);
         }
         if (! in_array($action, self::ACTIONS, true)) {
-            if (! $private || $text === '') {
+            if ($text === '') {
                 return;
             }
             // The first message of a new user leads to the manual.
             $action = $this->hasQueues((int) $chat['id']) ? 'menu' : 'start';
-        }
-
-        if (! in_array($action, self::PUBLIC_ACTIONS, true)
-            && ! $this->mayConfigure($chat, $message['from']['id'] ?? null, $message['sender_chat']['id'] ?? null)) {
-            $this->telegram->send((int) $chat['id'], $this->messages->adminsOnly());
-
-            return;
         }
 
         $this->run($action, (int) $chat['id'], $chat['type']);
@@ -75,12 +63,7 @@ final class UpdateHandler
         $newMessage = str_starts_with($data, Keyboards::NEW_PREFIX);
         $data = $newMessage ? substr($data, strlen(Keyboards::NEW_PREFIX)) : $data;
 
-        if ($chat === null) {
-            return;
-        }
-        if (! in_array($data, self::PUBLIC_ACTIONS, true) && ! $this->mayConfigure($chat, $query['from']['id'])) {
-            $this->answer($query['id'], $this->messages->adminsOnly(), alert: true);
-
+        if ($chat === null || $chat['type'] !== 'private') {
             return;
         }
 
@@ -145,9 +128,8 @@ final class UpdateHandler
 
         if (in_array($status, ['kicked', 'left'], true)) {
             Chat::query()->where('telegram_id', $chatId)->update(['active' => false]);
-        } elseif (in_array($member['chat']['type'], ['group', 'supergroup'], true)
-            && in_array($member['old_chat_member']['status'] ?? '', ['left', 'kicked'], true)) {
-            $this->run('start', $chatId, $member['chat']['type']);
+        } elseif ($member['chat']['type'] !== 'private') {
+            $this->telegram->call('leaveChat', ['chat_id' => $chatId]);
         }
     }
 
@@ -162,6 +144,7 @@ final class UpdateHandler
             'enable' => $this->setActive($chatId, $type, true, $messageId),
             'menu' => $this->showMenu($chatId, $type, $messageId),
             'help' => $this->render($chatId, $this->messages->manual(), Keyboards::manual($this->hasQueues($chatId)), $messageId),
+            'sources' => $this->render($chatId, $this->messages->sources(), Keyboards::back(), $messageId),
             'buttons' => $this->render($chatId, $this->messages->buttons(), Keyboards::manual($this->hasQueues($chatId)), $messageId),
             'settings' => $this->showSettings($chatId, $type, $messageId),
             'remind' => $this->showReminders($chatId, $type, $messageId),
@@ -238,22 +221,6 @@ final class UpdateHandler
     private function chat(int $chatId, string $type): Chat
     {
         return Chat::query()->firstOrCreate(['telegram_id' => $chatId], ['type' => $type, 'active' => true]);
-    }
-
-    /** @param array<string, mixed> $chat */
-    private function mayConfigure(array $chat, ?int $userId, ?int $senderChatId = null): bool
-    {
-        // In groups an anonymous administrator writes on behalf of the group itself.
-        if ($chat['type'] === 'private' || $senderChatId === $chat['id']) {
-            return true;
-        }
-        if ($userId === null || $senderChatId !== null) {
-            return false;
-        }
-
-        $member = $this->telegram->call('getChatMember', ['chat_id' => $chat['id'], 'user_id' => $userId]);
-
-        return in_array($member['status'], ['creator', 'administrator'], true);
     }
 
     private function answer(string $id, ?string $text = null, bool $alert = false): void

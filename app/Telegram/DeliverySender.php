@@ -57,11 +57,6 @@ final class DeliverySender
     {
         Log::warning("Delivery {$delivery->id} failed: {$e->getMessage()}");
 
-        if ($newId = $e->migratedTo()) {
-            ChatMigrator::migrate($delivery->telegram_id, $newId);
-
-            return true;
-        }
         if ($e->isChatGone()) {
             $chat?->update(['active' => false]);
             $delivery->update(['status' => Delivery::FAILED, 'error' => $e->getMessage()]);

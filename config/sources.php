@@ -30,12 +30,13 @@ return [
 
     /*
      * A source with a higher priority wins when sources disagree.
-     * "kinds" lists what is taken from the source.
+     * "page" is the public link shown to users, "kinds" lists what is taken from the source.
      */
     'sources' => [
         'site' => [
             'enabled' => true,
             'label' => 'сайт Запоріжжяобленерго',
+            'page' => 'https://www.zoe.com.ua/outage/',
             'class' => RssSource::class,
             'options' => ['url' => 'https://www.zoe.com.ua/feed/?post_type=outage_schedules'],
             'priority' => 100,
@@ -45,6 +46,7 @@ return [
         'telegram' => [
             'enabled' => true,
             'label' => 'канал ZOE_Alarm',
+            'page' => 'https://t.me/zoe_alarm',
             'class' => TelegramChannelSource::class,
             'options' => ['channel' => 'zoe_alarm'],
             'priority' => 50,

@@ -37,6 +37,11 @@ final class SourceRegistry
         return in_array($kind->value, $this->config($key, 'kinds', []), true);
     }
 
+    public function page(string $key): string
+    {
+        return (string) $this->config($key, 'page', '');
+    }
+
     private function config(string $key, string $name, mixed $default = null): mixed
     {
         return config("sources.sources.{$key}.{$name}", $default);

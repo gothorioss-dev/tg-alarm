@@ -16,9 +16,4 @@ class Chat extends Model
     {
         return $this->hasMany(Subscription::class)->orderBy('queue');
     }
-
-    public function isPrivate(): bool
-    {
-        return $this->type === 'private';
-    }
 }

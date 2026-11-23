@@ -5,7 +5,7 @@ namespace App\Telegram;
 use App\Models\Chat;
 use App\Schedule\Queues;
 
-/** Inline keyboards; they work the same in private chats and groups. */
+/** Inline keyboards of the bot screens. */
 final class Keyboards
 {
     /** Opens the screen in a new message, so the notification above stays intact. */
@@ -19,6 +19,7 @@ final class Keyboards
             [self::inline('⚡ Змінити / додати чергу', 'queue')],
             [self::inline('⚙️ Налаштування', 'settings')],
             [self::inline('📘 Інструкція', 'help'), self::inline('📖 Довідник кнопок', 'buttons')],
+            [self::inline('🔗 Джерела', 'sources')],
         ]];
     }
 

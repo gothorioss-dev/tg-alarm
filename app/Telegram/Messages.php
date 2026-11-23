@@ -98,7 +98,8 @@ final class Messages
             ."3. Далі я сам повідомлятиму про новий графік, зміни для ваших черг та аварійні відключення.\n"
             ."4. Нагадування перед відключенням: «⚙️ Налаштування» → «⏰ Нагадування».\n\n"
             ."Меню відкриває синя кнопка біля поля введення.\n"
-            .'Це неофіційний бот: дані беруться з сайту Запоріжжяобленерго та каналу ZOE_Alarm, фактичні відключення можуть відрізнятися. У групі налаштування змінюють адміністратори.';
+            .'Це неофіційний бот: дані беруться з джерел нижче, фактичні відключення можуть відрізнятися.'."\n\n"
+            .$this->sourceLinks();
     }
 
     public function buttons(): string
@@ -111,13 +112,9 @@ final class Messages
             ."⚙️ <b>Налаштування</b> — сповіщення та нагадування\n"
             ."🔕 / 🔔 — вимкнути або увімкнути всі повідомлення; черги зберігаються\n"
             ."⏰ <b>Нагадування</b> — за скільки хвилин попереджати про відключення\n"
+            ."🔗 <b>Джерела</b> — звідки беруться дані\n"
             ."📘 <b>Інструкція</b> — як користуватися ботом\n"
             .'☰ <b>Меню</b> — повернутися до головного меню';
-    }
-
-    public function adminsOnly(): string
-    {
-        return 'Змінювати налаштування можуть лише адміністратори групи.';
     }
 
     public function date(string $date): string
@@ -225,5 +222,25 @@ final class Messages
     private function footer(string $source, string $url): string
     {
         return "\n\n<a href=\"".e($url).'">Джерело: '.e($this->sources->label($source)).'</a>';
+    }
+
+    public function sources(): string
+    {
+        return "🔗 <b>Джерела даних</b>\n\n".$this->sourceLinks()."\n\n"
+            .'Якщо джерела розходяться, перевага за тим, що вище у списку.';
+    }
+
+    /** Enabled sources, the most trusted first. */
+    private function sourceLinks(): string
+    {
+        $keys = $this->sources->keys();
+        usort($keys, fn (string $a, string $b) => $this->sources->priority($b) <=> $this->sources->priority($a));
+
+        return implode("\n", array_map(function (string $key) {
+            $label = e($this->sources->label($key));
+            $page = $this->sources->page($key);
+
+            return '• '.($page === '' ? $label : '<a href="'.e($page)."\">{$label}</a>");
+        }, $keys));
     }
 }
