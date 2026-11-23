@@ -131,12 +131,13 @@ final class UpdateHandler
         }
     }
 
-    /** Every start shows the guide with the bottom keyboard; saved queues are kept. */
+    /** Every start leads to the queue selection; the guide is shown to those who have no queues yet. */
     private function welcome(Chat $chat): void
     {
+        $isNew = ! $chat->subscriptions()->exists();
         $chat->update(['active' => true]);
-        $this->sendWithKeyboard($chat, $this->messages->guide());
-        $this->open($chat, $chat->subscriptions()->exists() ? 'schedule' : 'queue');
+        $this->sendWithKeyboard($chat, $isNew ? $this->messages->guide() : $this->messages->welcomeBack());
+        $this->open($chat, 'queue');
     }
 
     /** Replaces an outdated bottom keyboard; a schedule brings the keyboard itself. */

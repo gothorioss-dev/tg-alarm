@@ -120,7 +120,7 @@ class ReminderTest extends TestCase
         $this->assertStringContainsString('Це лише графік', $this->press('help'));
     }
 
-    public function test_first_start_shows_guide_then_selection_or_schedule(): void
+    public function test_first_start_shows_guide_and_every_start_shows_selection(): void
     {
         $texts = [];
         Http::fake(function ($r) use (&$texts) {
@@ -133,7 +133,7 @@ class ReminderTest extends TestCase
         $this->assertStringContainsString('Оберіть чергу', $texts[1]);
         $start(5);
         $this->assertStringContainsString('Довідник', $texts[0]);
-        $this->assertStringContainsString('Довідник', $texts[2]);
-        $this->assertStringNotContainsString('Оберіть чергу', $texts[3]);
+        $this->assertStringContainsString('збережено', $texts[2]);
+        $this->assertStringContainsString('Оберіть чергу', $texts[3]);
     }
 }

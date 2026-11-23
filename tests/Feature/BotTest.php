@@ -243,7 +243,7 @@ class BotTest extends TestCase
         Http::assertSentCount(9);
     }
 
-    public function test_every_start_shows_the_guide_and_keeps_queues(): void
+    public function test_repeated_start_shows_the_selection_and_keeps_queues(): void
     {
         $this->fake();
         $chat = Chat::query()->create(['telegram_id' => 5, 'type' => 'private']);
@@ -253,12 +253,13 @@ class BotTest extends TestCase
 
         for ($i = 1; $i <= 2; $i++) {
             $this->update($this->message('/start'));
-            $this->assertCount($i, Http::recorded(fn ($r) => str_contains($r['text'] ?? '', 'Довідник') && isset($r['reply_markup']['keyboard'])));
+            $this->assertSame($i, $this->keyboardMessages());
+            $this->assertCount($i, Http::recorded(fn ($r) => in_array('✅ 5.2', array_column(array_merge(...($r['reply_markup']['inline_keyboard'] ?? [[]])), 'text'), true)));
         }
 
         $this->assertTrue($chat->refresh()->active);
         $this->assertSame(['5.2'], $chat->subscriptions->pluck('queue')->all());
-        Http::assertNotSent(fn ($r) => str_contains($r['text'] ?? '', 'Оберіть чергу'));
+        Http::assertNotSent(fn ($r) => str_contains($r['text'] ?? '', 'Довідник'));
     }
 
     private function delivery(): Delivery
