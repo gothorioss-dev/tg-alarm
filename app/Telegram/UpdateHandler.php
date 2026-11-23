@@ -10,7 +10,7 @@ use App\Schedule\Queues;
 final class UpdateHandler
 {
     /** Buttons of messages sent by earlier versions => current actions. */
-    private const LEGACY = ['menu' => 'schedule', 'buttons' => 'help', 'sources' => 'help', 'remind' => 'settings'];
+    private const LEGACY = ['menu' => 'schedule', 'buttons' => 'help', 'sources' => 'help', 'remind' => 'settings', 'stop' => 'settings', 'enable' => 'settings'];
 
     private const LEGACY_NEW_PREFIX = 'new:';
 
@@ -92,9 +92,6 @@ final class UpdateHandler
         } elseif (str_starts_with($data, 'r:')) {
             $toast = $this->setReminder($chat, (int) substr($data, 2));
             $data = 'settings';
-        } elseif ($data === 'stop' || $data === 'enable') {
-            $chat->update(['active' => $data === 'enable']);
-            $data = 'settings';
         } elseif ($data === 'mute' || $data === 'sound') {
             $chat->update(['silent' => $data === 'mute']);
             $data = 'settings';
@@ -138,7 +135,6 @@ final class UpdateHandler
     private function welcome(Chat $chat): void
     {
         $isNew = ! $chat->subscriptions()->exists();
-        $chat->update(['active' => true]);
         $this->sendWithKeyboard($chat, $isNew ? $this->messages->guide() : $this->messages->welcomeBack());
         $this->open($chat, 'queue');
     }
@@ -189,7 +185,7 @@ final class UpdateHandler
         return match ($screen) {
             'schedule' => $this->showSchedule($chat, $messageId),
             'queue' => $this->showQueues($chat, $messageId),
-            'settings' => $this->render($chat, $this->messages->settings($chat->active, $chat->silent, $chat->remind_minutes), Keyboards::settings($chat), $messageId),
+            'settings' => $this->render($chat, $this->messages->settings($chat->silent, $chat->remind_minutes), Keyboards::settings($chat), $messageId),
             'help' => $this->render($chat, $this->messages->guide(), null, $messageId),
             'invite' => $this->showInvite($chat, $messageId),
             'stats' => $this->render($chat, $this->messages->statistics($this->statistics->collect()), null, $messageId),
@@ -213,7 +209,7 @@ final class UpdateHandler
 
         // Only stored data is used; the worker keeps it up to date.
         $checkedAt = SourceState::query()->max('succeeded_at');
-        $text = $this->messages->currentSchedule(OutageTimeline::load(), $queues, $chat->active, $checkedAt);
+        $text = $this->messages->currentSchedule(OutageTimeline::load(), $queues, $checkedAt);
 
         return $messageId === null
             ? $this->sendWithKeyboard($chat, $text)
@@ -299,7 +295,14 @@ final class UpdateHandler
 
     private function chat(int $chatId): Chat
     {
-        return Chat::query()->firstOrCreate(['telegram_id' => $chatId], ['type' => 'private', 'active' => true]);
+        $chat = Chat::query()->firstOrCreate(['telegram_id' => $chatId], ['type' => 'private', 'active' => true]);
+
+        // Only a block makes a chat inactive, and a blocked bot gets no updates.
+        if (! $chat->active) {
+            $chat->update(['active' => true]);
+        }
+
+        return $chat;
     }
 
     private function answer(string $id, ?string $text = null, bool $alert = false): void

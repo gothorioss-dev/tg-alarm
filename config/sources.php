@@ -31,7 +31,8 @@ return [
     /*
      * A source with a higher priority wins when sources disagree.
      * "page" is the public link shown to users, "kinds" lists what is taken from the source
-     * ("unknown" = texts about outages without a list, passed on to users as is).
+     * and sent to users: schedules,
+     * "emergency" notices and "unknown" texts about outages without a list.
      */
     'sources' => [
         'site' => [
@@ -42,7 +43,7 @@ return [
             'options' => ['url' => 'https://www.zoe.com.ua/feed/?post_type=outage_schedules'],
             'priority' => 100,
             'interval' => 60,
-            'kinds' => [Kind::Schedule->value, Kind::Emergency->value, Kind::Unknown->value],
+            'kinds' => [Kind::Schedule->value],
         ],
         'telegram' => [
             'enabled' => true,

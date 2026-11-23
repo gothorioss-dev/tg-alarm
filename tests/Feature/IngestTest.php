@@ -180,6 +180,7 @@ class IngestTest extends TestCase
 
     public function test_emergency_goes_to_everyone_once_and_only_from_the_site(): void
     {
+        config(['sources.sources.site.kinds' => ['schedule', 'emergency', 'unknown']]);
         $text = "УВАГА! ДІЮТЬ СПЕЦІАЛЬНІ ГРАФІКИ АВАРІЙНИХ ВІДКЛЮЧЕНЬ\nТекст";
         $this->publish('site', '10:50', $text, 'e');
         $this->publish('site', '10:50', $text.' змінено', 'e');
@@ -292,6 +293,7 @@ class IngestTest extends TestCase
 
     public function test_unclear_text_is_passed_on_from_the_site_and_keeps_the_schedule(): void
     {
+        config(['sources.sources.site.kinds' => ['schedule', 'emergency', 'unknown']]);
         $this->version('site', '09:00', $this->rows('17:00 – 22:00'));
         $text = 'ГПВ на 23 листопада скасовано з 15:00';
         $this->publish('telegram', '10:50', $text);
@@ -344,6 +346,16 @@ class IngestTest extends TestCase
         app(Reminders::class)->queueDue();
 
         $this->assertCount(3, $this->sent(1));
+    }
+
+    public function test_by_default_users_get_schedules_only(): void
+    {
+        $this->publish('site', '10:50', "УВАГА! ДІЮТЬ ГРАФІКИ АВАРІЙНИХ ВІДКЛЮЧЕНЬ (оновлено о 10:49)\nЗапроваджено ГАВ. Продовжують діяти ГПВ.");
+        $this->assertCount(0, $this->sent(999));
+        $this->publish('site', '10:52', 'ГПВ на 23 листопада скасовано з 15:00');
+
+        $this->assertCount(0, $this->sent(1));
+        $this->assertCount(1, $this->sent(999));
     }
 
     public function test_first_run_on_real_data_is_silent_and_then_nothing_repeats(): void

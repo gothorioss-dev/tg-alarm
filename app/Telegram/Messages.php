@@ -69,7 +69,7 @@ final class Messages
     }
 
     /** @param list<string> $queues */
-    public function currentSchedule(OutageTimeline $timeline, array $queues, bool $active = true, ?string $checkedAt = null): string
+    public function currentSchedule(OutageTimeline $timeline, array $queues, ?string $checkedAt = null): string
     {
         if ($queues === []) {
             return 'Черги ще не обрано.';
@@ -85,7 +85,7 @@ final class Messages
         }
 
         if ($parts === []) {
-            $parts[] = 'Графіків на сьогодні та завтра поки немає.'.($active ? ' Коли їх опублікують, я повідомлю.' : '');
+            $parts[] = 'Графіків на сьогодні та завтра поки немає. Коли їх опублікують, я повідомлю.';
         } else {
             $next = array_filter(array_map(fn (string $q) => $this->next($q, $timeline, count($queues) > 1), $queues));
 
@@ -95,9 +95,6 @@ final class Messages
         }
         if ($checkedAt !== null) {
             $parts[] = '<i>Дані на '.CarbonImmutable::parse($checkedAt, 'UTC')->setTimezone(config('telegram.timezone'))->format('H:i, d.m').'</i>';
-        }
-        if (! $active) {
-            $parts[] = '🔕 Повідомлення не надсилаються.';
         }
 
         return implode("\n\n", $parts);
@@ -126,7 +123,7 @@ final class Messages
             ."<b>Кнопки внизу</b>\n"
             ."📅 <b>Графік</b> — відключення на сьогодні та завтра\n"
             ."⚡ <b>Мої черги</b> — додати або прибрати чергу\n"
-            ."🔔 <b>Сповіщення</b> — повідомлення, звук і нагадування перед відключенням\n"
+            ."🔔 <b>Сповіщення</b> — звук і нагадування перед відключенням\n"
             ."📖 <b>Довідник</b> — ця підказка\n"
             ."👥 <b>Запросити</b> — надіслати бота рідним або сусідам\n\n"
             ."❗ <b>Важливо</b>\n"
@@ -181,7 +178,7 @@ final class Messages
 
     public function welcomeBack(): string
     {
-        return '👋 Вітаю! Повідомлення увімкнено, ваші черги збережено. Перевірте їх нижче.';
+        return '👋 Вітаю! Ваші черги збережено. Перевірте їх нижче.';
     }
 
     public function menuUpdated(): string
@@ -206,14 +203,13 @@ final class Messages
         return 'Оберіть хоча б одну чергу.';
     }
 
-    public function settings(bool $active, bool $silent, ?int $remindMinutes): string
+    public function settings(bool $silent, ?int $remindMinutes): string
     {
         return "🔔 <b>Сповіщення</b>\n\n"
-            .'Повідомлення: '.($active ? 'надсилаються' : 'не надсилаються')."\n"
             .'Звук: '.($silent ? '🔇 без звуку' : '🔊 зі звуком')."\n"
             .'Нагадування перед відключенням: '.$this->reminderLabel($remindMinutes)
-            .($active ? '' : "\n\nПоки повідомлення не надсилаються, нагадувань теж не буде.")
-            ."\n\nНижче можна змінити. Цифри — за скільки хвилин нагадувати.";
+            ."\n\nНижче можна змінити. Цифри — за скільки хвилин нагадувати.\n"
+            .'Новий графік і зміни надходять завжди.';
     }
 
     public function reminderLabel(?int $minutes): string

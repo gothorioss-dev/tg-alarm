@@ -53,7 +53,8 @@ class BotTest extends TestCase
 
         $this->update($this->press('done'));
         $this->update($this->press('stop'));
-        $this->assertFalse($chat->refresh()->active);
+        $this->assertTrue($chat->refresh()->active);
+        $chat->update(['active' => false]);
         $this->update($this->message('/start'));
         $this->assertTrue($chat->refresh()->active);
     }
@@ -63,7 +64,7 @@ class BotTest extends TestCase
         return in_array($data, array_column(array_merge(...($request['reply_markup']['inline_keyboard'] ?? [[]])), 'callback_data'), true);
     }
 
-    public function test_screens_are_edited_in_place_and_toggles_notifications(): void
+    public function test_screens_are_edited_in_place_and_schedules_cannot_be_turned_off(): void
     {
         $this->fake();
         $this->update($this->message('/start'));
@@ -71,18 +72,16 @@ class BotTest extends TestCase
         Http::assertSent(fn ($r) => ($r['show_alert'] ?? false) === true);
 
         $this->update($this->press('q:5.2'));
-        $this->update($this->press('stop'));
         $chat = Chat::query()->sole();
-        $this->assertFalse($chat->active);
-        Http::assertSent(fn ($r) => str_ends_with($r->url(), 'editMessageText') && $this->hasButton($r, 'enable'));
 
-        // Changing queues does not silently turn notifications back on.
-        $this->update($this->press('q:6.1'));
-        $this->assertFalse($chat->refresh()->active);
+        // Buttons of earlier messages only open the settings.
+        foreach (['stop', 'enable'] as $data) {
+            $this->update($this->press($data));
+            $this->assertTrue($chat->refresh()->active);
+        }
 
-        $this->update($this->press('enable'));
-        $this->assertTrue($chat->refresh()->active);
-        $this->assertSame(['5.2', '6.1'], $chat->subscriptions->pluck('queue')->all());
+        Http::assertSent(fn ($r) => str_ends_with($r->url(), 'editMessageText') && $this->hasButton($r, 'mute') && $this->hasButton($r, 'r:0'));
+        Http::assertNotSent(fn ($r) => $this->hasButton($r, 'stop'));
     }
 
     public function test_repeated_tap_is_harmless(): void

@@ -79,9 +79,6 @@ final class Keyboards
         );
 
         return ['inline_keyboard' => [
-            [$chat->active
-                ? self::inline('🔕 Не надсилати повідомлення', 'stop')
-                : self::inline('🔔 Надсилати повідомлення', 'enable')],
             [$chat->silent
                 ? self::inline('🔊 Увімкнути звук', 'sound')
                 : self::inline('🔇 Вимкнути звук', 'mute')],

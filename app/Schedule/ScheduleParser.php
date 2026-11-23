@@ -20,7 +20,7 @@ final class ScheduleParser
         if ($hasGpv && preg_match('/^\s*\d[.,]\d\s*:?\s*\d{1,2}:\d{2}/mu', $text)) {
             return Kind::Schedule;
         }
-        if (preg_match('/\bСГАВ\b|спеціальн\w+ графік\w+ аварійних відключень/ui', $text)) {
+        if (preg_match('/\bС?ГАВ\b|графік\w* аварійних відключень/ui', $text)) {
             return Kind::Emergency;
         }
         if ($hasGpv && $this->isFullCancellation($text)) {
