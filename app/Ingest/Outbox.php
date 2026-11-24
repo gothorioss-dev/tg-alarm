@@ -92,6 +92,8 @@ final class Outbox
     /** A called off outage that returns later is a new event and needs a new reminder. */
     private function forgetReminders(string $date, string $queue, DaySchedule $old, DaySchedule $new, int $publicationId): void
     {
+        // Including those who are not subscribed any more: they may return to the queue.
+        $chatIds = Chat::query()->pluck('id');
         $starts = array_map(fn (Interval $interval) => $interval->from, $new->intervals($queue));
 
         foreach ($old->intervals($queue) as $interval) {
@@ -102,11 +104,16 @@ final class Outbox
             $start = CarbonImmutable::parse($date, config('telegram.timezone'))
                 ->setTime(intdiv($interval->from, 60), $interval->from % 60)->timestamp;
 
-            foreach (Delivery::query()->where('dedupe_key', 'like', "remind:%:{$queue}:{$start}")->get() as $delivery) {
-                $delivery->update([
-                    'dedupe_key' => "{$delivery->dedupe_key}:void:{$publicationId}",
-                    'status' => $delivery->status === Delivery::PENDING ? Delivery::EXPIRED : $delivery->status,
-                ]);
+            // Exact keys use the index; a pattern would scan the whole log.
+            foreach ($chatIds->chunk(500) as $ids) {
+                $keys = $ids->map(fn (int $id) => "remind:{$id}:{$queue}:{$start}")->all();
+
+                foreach (Delivery::query()->whereIn('dedupe_key', $keys)->get() as $delivery) {
+                    $delivery->update([
+                        'dedupe_key' => "{$delivery->dedupe_key}:void:{$publicationId}",
+                        'status' => $delivery->status === Delivery::PENDING ? Delivery::EXPIRED : $delivery->status,
+                    ]);
+                }
             }
         }
     }

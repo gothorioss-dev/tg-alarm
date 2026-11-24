@@ -16,7 +16,7 @@ docker compose logs -f worker bot
 
 ### Бэкап
 
-Worker раз в сутки (после 03:30 по Киеву) делает проверенную копию базы в volume `backups` и удаляет копии старше `BACKUP_KEEP_DAYS` дней (по умолчанию 30, `config/backup.php`; последние 3 остаются всегда). О сбое сообщает администратору.
+Worker раз в сутки (после 03:30 по Киеву) делает проверенную копию базы в volume `backups` и хранит 5 последних (`BACKUP_KEEP_DAYS` и `keep_min` в `config/backup.php`). О сбое сообщает администратору.
 
 ```bash
 docker compose exec worker ls -l /backups                        # список

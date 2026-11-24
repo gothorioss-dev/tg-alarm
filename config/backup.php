@@ -4,11 +4,11 @@ return [
     /* Directory for daily database copies; empty = backups are off. */
     'path' => env('BACKUP_PATH'),
 
-    /* Copies older than this many days are removed. */
-    'keep_days' => max(1, (int) env('BACKUP_KEEP_DAYS', 30)),
+    /* Copies older than this many days are removed: 4 days and today make 5 copies. */
+    'keep_days' => max(1, (int) env('BACKUP_KEEP_DAYS', 4)),
 
     /* The newest copies that are never removed, even when backups stop working. */
-    'keep_min' => 3,
+    'keep_min' => 5,
 
     /* Local time (Europe/Kyiv) after which the copy of the day is made. */
     'time' => '03:30',

@@ -9,7 +9,7 @@ return [
     // Choices offered in the reminder settings.
     'remind_minutes' => [10, 15, 30, 60],
     // Records of the delivery log older than this many days are removed.
-    'deliveries_keep_days' => max(1, (int) env('DELIVERIES_KEEP_DAYS', 30)),
+    'deliveries_keep_days' => max(1, (int) env('DELIVERIES_KEEP_DAYS', 7)),
     // Protection from floods: actions of one user allowed within this many seconds.
     'rate_limit' => ['actions' => 20, 'seconds' => 30],
     // Presses of the same button are one action until a pause of this many seconds:

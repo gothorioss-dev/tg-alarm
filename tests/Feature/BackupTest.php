@@ -64,6 +64,8 @@ class BackupTest extends TestCase
 
     public function test_only_outdated_daily_copies_are_removed(): void
     {
+        config(['backup.keep_days' => 30, 'backup.keep_min' => 3]);
+
         foreach (['2026-09-01', '2026-10-22', '2026-10-23', '2026-10-24', '2026-10-25', '2026-11-22'] as $date) {
             touch("{$this->dir}/daily-{$date}.sqlite");
         }
@@ -76,6 +78,8 @@ class BackupTest extends TestCase
 
     public function test_newest_copies_survive_a_long_pause(): void
     {
+        config(['backup.keep_min' => 3]);
+
         foreach (['2026-01-01', '2026-01-02', '2026-01-03'] as $date) {
             touch("{$this->dir}/daily-{$date}.sqlite");
         }
@@ -106,5 +110,15 @@ class BackupTest extends TestCase
         app(DailyBackup::class)->runDue();
         $this->assertSame([], $this->names());
         $this->assertSame(0, Delivery::query()->count());
+    }
+
+    public function test_five_copies_are_kept_by_default(): void
+    {
+        foreach (['17', '18', '19', '20', '21', '22'] as $day) {
+            touch("{$this->dir}/daily-2026-11-{$day}.sqlite");
+        }
+        app(DailyBackup::class)->runDue();
+
+        $this->assertSame(['2026-11-19', '2026-11-20', '2026-11-21', '2026-11-22', '2026-11-23'], $this->names());
     }
 }

@@ -335,7 +335,7 @@ class BotTest extends TestCase
 
     public function test_outdated_delivery_records_are_removed(): void
     {
-        foreach (['old' => [31, 'sent'], 'failed' => [31, 'failed'], 'expired' => [31, 'expired'], 'waiting' => [31, 'pending'], 'recent' => [29, 'sent']] as $key => [$days, $status]) {
+        foreach (['old' => [8, 'sent'], 'failed' => [8, 'failed'], 'expired' => [8, 'expired'], 'waiting' => [8, 'pending'], 'recent' => [6, 'sent']] as $key => [$days, $status]) {
             $delivery = new Delivery(['telegram_id' => 5, 'dedupe_key' => $key, 'text' => 't', 'status' => $status, 'available_at' => now()]);
             $delivery->created_at = now()->subDays($days);
             $delivery->save();
@@ -344,7 +344,7 @@ class BotTest extends TestCase
         app(DeliveryCleanup::class)->runDue();
         $this->assertEqualsCanonicalizing(['waiting', 'recent'], Delivery::query()->pluck('dedupe_key')->all());
 
-        config(['telegram.deliveries_keep_days' => 10]);
+        config(['telegram.deliveries_keep_days' => 5]);
         app(DeliveryCleanup::class)->runDue();
         $this->assertSame(['waiting'], Delivery::query()->pluck('dedupe_key')->all());
     }
