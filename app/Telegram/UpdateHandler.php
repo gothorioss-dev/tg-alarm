@@ -6,6 +6,8 @@ use App\Models\Chat;
 use App\Models\SourceState;
 use App\Schedule\OutageTimeline;
 use App\Schedule\Queues;
+use Illuminate\Support\Facades\Log;
+use Throwable;
 
 final class UpdateHandler
 {
@@ -15,6 +17,9 @@ final class UpdateHandler
     private const LEGACY_NEW_PREFIX = 'new:';
 
     private ?string $botLink = null;
+
+    /** @var array<int, array{screen: string, message: ?int, due: int, until: int}> replies delayed by a Telegram limit by chat id, time in seconds */
+    private array $delayed = [];
 
     public function __construct(private TelegramClient $telegram, private Messages $messages, private Statistics $statistics, private RateLimiter $limiter, private PressSeries $series) {}
 
@@ -67,29 +72,23 @@ final class UpdateHandler
         $chat = $this->chat((int) $message['chat']['id']);
 
         if (preg_match('/^\/start(\s|$)/', $text)) {
-            $this->welcome($chat);
+            $this->present($chat, 'start');
 
             return;
         }
         if ($screen = Keyboards::screen($text, $chat->telegram_id)) {
-            $this->updateKeyboard($chat, $screen);
-            $this->open($chat, $screen, (int) $message['message_id']);
+            $this->present($chat, $screen, pressedId: (int) $message['message_id']);
 
             return;
         }
         if (! $chat->subscriptions()->exists()) {
             // The guide is not repeated to those who have already got it with the keyboard.
-            if ($chat->keyboard_version === null) {
-                $this->welcome($chat);
-            } else {
-                $this->updateKeyboard($chat, 'queue');
-                $this->open($chat, 'queue');
-            }
+            $this->present($chat, $chat->keyboard_version === null ? 'start' : 'queue');
 
             return;
         }
 
-        $this->open($chat, 'schedule');
+        $this->present($chat, 'schedule');
     }
 
     /** @param array<string, mixed> $query */
@@ -101,7 +100,7 @@ final class UpdateHandler
 
         if (str_starts_with($data, self::LEGACY_NEW_PREFIX)) {
             $this->answer($query['id']);
-            $this->open($chat, 'schedule');
+            $this->present($chat, 'schedule');
 
             return;
         }
@@ -129,12 +128,7 @@ final class UpdateHandler
         $this->answer($query['id'], $toast, $alert);
 
         if (in_array($data, ['schedule', 'queue', 'settings', 'help'], true)) {
-            $this->show($chat, $data, $messageId);
-
-            // The service screen has turned into a schedule, which must stay.
-            if ($data === 'schedule' && $chat->menu_message_id === $messageId && $chat->subscriptions()->exists()) {
-                $chat->update(['menu_message_id' => null]);
-            }
+            $this->present($chat, $data, $messageId);
         }
     }
 
@@ -143,6 +137,7 @@ final class UpdateHandler
     {
         $chatId = (int) $member['chat']['id'];
         $this->series->forget($chatId);
+        unset($this->delayed[$chatId]);
 
         if (in_array($member['new_chat_member']['status'], ['kicked', 'left'], true)) {
             Chat::query()->where('telegram_id', $chatId)->update([
@@ -160,7 +155,8 @@ final class UpdateHandler
     {
         $isNew = ! $chat->subscriptions()->exists();
         $this->sendWithKeyboard($chat, $isNew ? $this->messages->guide() : $this->messages->welcomeBack());
-        $this->open($chat, 'queue');
+        // Delayed separately, so that the guide is not repeated.
+        $this->present($chat, 'queue');
     }
 
     /** Replaces an outdated bottom keyboard; a schedule brings the keyboard itself. */
@@ -409,7 +405,7 @@ final class UpdateHandler
     /** There is delayed work to do by tick(). */
     public function isWaiting(): bool
     {
-        return $this->series->hasMessages();
+        return $this->delayed !== [] || $this->series->hasMessages();
     }
 
     /** Does delayed work; called regularly. */
@@ -418,5 +414,83 @@ final class UpdateHandler
         foreach ($this->series->takeMessages($last) as $chatId => $messageIds) {
             $this->delete($chatId, $messageIds);
         }
+
+        foreach ($last ? [] : $this->delayed as $chatId => $reply) {
+            if ($reply['due'] > now()->getTimestamp()) {
+                continue;
+            }
+
+            try {
+                $this->present($this->chat($chatId), $reply['screen'], $reply['message']);
+            } catch (Throwable $e) {
+                unset($this->delayed[$chatId]);
+                Log::error("Delayed reply failed: {$e->getMessage()}");
+            }
+        }
+    }
+
+    /**
+     * Shows a screen now or, when Telegram asks to wait, later without holding up other users.
+     * Only the screen is repeated, never the action that led to it.
+     */
+    private function present(Chat $chat, string $screen, ?int $messageId = null, ?int $pressedId = null): void
+    {
+        $now = now()->getTimestamp();
+        $waiting = $this->delayed[$chat->telegram_id] ?? null;
+
+        // The newest screen replaces the one that still waits.
+        if ($waiting !== null && $waiting['due'] > $now) {
+            $this->delay($chat, $screen, $messageId, $pressedId, $waiting['due'], $now);
+
+            return;
+        }
+
+        unset($this->delayed[$chat->telegram_id]);
+
+        try {
+            if ($screen === 'start') {
+                $this->welcome($chat);
+            } elseif ($messageId === null) {
+                $this->updateKeyboard($chat, $screen);
+                $this->open($chat, $screen, $pressedId);
+            } else {
+                $this->show($chat, $screen, $messageId);
+
+                // The service screen has turned into a schedule, which must stay.
+                if ($screen === 'schedule' && $chat->menu_message_id === $messageId && $chat->subscriptions()->exists()) {
+                    $chat->update(['menu_message_id' => null]);
+                }
+            }
+        } catch (TelegramException $e) {
+            if ($e->getCode() !== 429) {
+                throw $e;
+            }
+
+            $this->delay($chat, $screen, $messageId, $pressedId, $now + max(1, $e->retryAfter()), $waiting === null ? $now : $waiting['until'] - $this->replyExpires());
+        }
+    }
+
+    /** @param int $since when the reply was asked for */
+    private function delay(Chat $chat, string $screen, ?int $messageId, ?int $pressedId, int $due, int $since): void
+    {
+        if ($pressedId !== null) {
+            $this->series->collect($chat->telegram_id, $pressedId);
+        }
+
+        $until = $since + $this->replyExpires();
+
+        if ($due > $until) {
+            unset($this->delayed[$chat->telegram_id]);
+            Log::warning('A reply was dropped: Telegram asks to wait for '.($due - now()->getTimestamp()).' s');
+
+            return;
+        }
+
+        $this->delayed[$chat->telegram_id] = ['screen' => $screen, 'message' => $messageId, 'due' => $due, 'until' => $until];
+    }
+
+    private function replyExpires(): int
+    {
+        return (int) config('telegram.reply_expires');
     }
 }

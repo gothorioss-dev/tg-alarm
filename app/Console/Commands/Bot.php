@@ -66,7 +66,11 @@ class Bot extends Command
                 }
             }
 
-            rescue(fn () => $handler->tick(), report: false);
+            try {
+                $handler->tick();
+            } catch (Throwable $e) {
+                Log::error("Delayed work failed: {$e->getMessage()}");
+            }
         }
 
         rescue(fn () => $handler->tick(last: true), report: false);

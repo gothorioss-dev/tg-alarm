@@ -4,58 +4,104 @@ namespace App\Telegram;
 
 use App\Models\Chat;
 use App\Models\Delivery;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Sleep;
 
 final class DeliverySender
 {
     private const MAX_ATTEMPTS = 12;
 
-    /** Keeps below the Telegram limit of about 30 messages per second. */
-    private const PAUSE_MICROSECONDS = 50_000;
-
     public function __construct(private TelegramClient $telegram) {}
 
-    public function flush(int $limit = 200): void
+    public function flush(DeliveryChannel $channel = DeliveryChannel::Broadcast, int $limit = 200): void
     {
         Delivery::query()->where('status', Delivery::PENDING)->where('expires_at', '<', now())
             ->update(['status' => Delivery::EXPIRED]);
 
-        $deliveries = Delivery::query()->where('status', Delivery::PENDING)
-            ->where('available_at', '<=', now())->orderBy('id')->limit($limit)->get();
+        $queue = $channel->pending()->where('available_at', '<=', now())->limit($limit)->pluck('telegram_id', 'id')->all();
 
-        foreach ($deliveries as $delivery) {
-            if (! $this->send($delivery)) {
+        while ($queue !== []) {
+            $started = microtime(true);
+            $ids = $this->takeBatch($queue);
+
+            if (! $this->sendBatch($ids)) {
                 return;
             }
-            usleep(self::PAUSE_MICROSECONDS);
+            Sleep::usleep((int) max(0, (count($ids) / $channel->rate() - (microtime(true) - $started)) * 1_000_000));
         }
     }
 
-    /** @return bool false when the whole run must pause */
-    private function send(Delivery $delivery): bool
+    /**
+     * Messages to one chat never go at the same time, which keeps their order.
+     *
+     * @param  array<int, int>  $queue  chat ids by delivery id; the taken ones are removed
+     * @return list<int>
+     */
+    private function takeBatch(array &$queue): array
     {
-        $chat = Chat::query()->where('telegram_id', $delivery->telegram_id)->first();
+        $batch = array_slice(array_unique($queue), 0, max(1, (int) config('telegram.send.parallel')), true);
+        $queue = array_diff_key($queue, $batch);
 
-        if ($chat && ! $chat->active && ! str_starts_with($delivery->dedupe_key, 'admin:')) {
-            $delivery->update(['status' => Delivery::EXPIRED]);
+        return array_keys($batch);
+    }
 
-            return true;
-        }
+    /**
+     * @param  list<int>  $ids
+     * @return bool false when the whole run must pause
+     */
+    private function sendBatch(array $ids): bool
+    {
+        // Read again: a message may have been called off since the run started.
+        $deliveries = Delivery::query()->whereIn('id', $ids)->where('status', Delivery::PENDING)->get()->keyBy('id');
+        $chats = Chat::query()->whereIn('telegram_id', $deliveries->pluck('telegram_id'))->get()->keyBy('telegram_id');
+        $messages = [];
 
-        try {
+        foreach ($ids as $id) {
+            if (! $delivery = $deliveries->get($id)) {
+                continue;
+            }
+
+            $chat = $chats->get($delivery->telegram_id);
             $isAdminAlert = str_starts_with($delivery->dedupe_key, 'admin:');
-            $this->telegram->send($delivery->telegram_id, $delivery->text, [
+
+            if ($chat && ! $chat->active && ! $isAdminAlert) {
+                $delivery->update(['status' => Delivery::EXPIRED]);
+
+                continue;
+            }
+
+            $messages[$id] = [$delivery->telegram_id, $delivery->text, [
                 'reply_markup' => Keyboards::bottom($delivery->telegram_id),
                 // Service alerts always sound.
                 'disable_notification' => $chat !== null && $chat->silent && ! $isAdminAlert,
-            ]);
-            $chat?->update(['keyboard_version' => Keyboards::version($delivery->telegram_id)]);
-            $delivery->update(['status' => Delivery::SENT, 'sent_at' => now(), 'error' => null]);
-
-            return true;
-        } catch (TelegramException $e) {
-            return $this->failed($delivery, $chat, $e);
+            ]];
         }
+
+        if ($messages === []) {
+            return true;
+        }
+
+        $errors = $this->telegram->sendMany($messages);
+
+        return DB::transaction(function () use ($errors, $deliveries, $chats) {
+            $continue = true;
+
+            foreach ($errors as $id => $error) {
+                $delivery = $deliveries->get($id);
+                $chat = $chats->get($delivery->telegram_id);
+
+                if ($error !== null) {
+                    $continue = $this->failed($delivery, $chat, $error) && $continue;
+
+                    continue;
+                }
+                $chat?->update(['keyboard_version' => Keyboards::version($delivery->telegram_id)]);
+                $delivery->update(['status' => Delivery::SENT, 'sent_at' => now(), 'error' => null]);
+            }
+
+            return $continue;
+        });
     }
 
     private function failed(Delivery $delivery, ?Chat $chat, TelegramException $e): bool

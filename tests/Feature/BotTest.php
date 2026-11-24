@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\Chat;
 use App\Models\Delivery;
+use App\Telegram\DeliveryChannel;
 use App\Telegram\DeliveryCleanup;
 use App\Telegram\DeliverySender;
 use App\Telegram\Keyboards;
@@ -287,7 +288,7 @@ class BotTest extends TestCase
 
         // Service alerts always sound.
         Delivery::query()->create(['telegram_id' => 5, 'dedupe_key' => 'admin:x', 'text' => 'alert', 'available_at' => now()]);
-        app(DeliverySender::class)->flush();
+        app(DeliverySender::class)->flush(DeliveryChannel::Urgent);
         Http::assertSent(fn ($r) => ($r['text'] ?? '') === 'alert' && $r['disable_notification'] === false);
 
         $this->update($this->press('sound'));
@@ -548,5 +549,91 @@ class BotTest extends TestCase
         $handler->handle(['my_chat_member' => ['chat' => ['id' => 5, 'type' => 'private'], 'new_chat_member' => ['status' => 'kicked']]]);
         $handler->handle($this->message('/start'));
         $this->assertTrue(Chat::query()->sole()->active);
+    }
+
+    public function test_reply_delayed_by_telegram_comes_later_once_and_up_to_date(): void
+    {
+        $limited = true;
+        Http::fake(function ($r) use (&$limited) {
+            return $limited && preg_match('/sendMessage|editMessageText/', $r->url())
+                ? Http::response(['ok' => false, 'error_code' => 429, 'description' => 'Too Many', 'parameters' => ['retry_after' => 5]], 429)
+                : Http::response(['ok' => true, 'result' => ['message_id' => 60]]);
+        });
+        $this->freezeTime();
+        $chat = Chat::query()->create(['telegram_id' => 5, 'type' => 'private', 'keyboard_version' => Keyboards::version(5)]);
+        $chat->subscriptions()->create(['queue' => '1.1']);
+        $handler = app(UpdateHandler::class);
+
+        $handler->handle($this->message(Keyboards::SCHEDULE));
+        $handler->handle($this->press('q+:2.1'));
+        $this->assertSame(1, $this->sent('sendMessage'));
+        $this->assertSame(0, $this->sent('editMessageText'));
+        // The choice itself is made at once.
+        $this->assertSame(2, $chat->subscriptions()->count());
+
+        $limited = false;
+        $handler->tick();
+        $this->assertSame(0, $this->sent('editMessageText'));
+        $this->travel(5)->seconds();
+        $handler->tick();
+        $handler->tick();
+        $this->assertSame(1, $this->sent('editMessageText'));
+        $this->assertSame(1, $this->sent('sendMessage'));
+        $this->assertDeleted(50);
+        $this->assertSame(2, $chat->subscriptions()->count());
+        $this->assertFalse($handler->isWaiting());
+    }
+
+    public function test_reply_is_dropped_when_telegram_asks_to_wait_too_long(): void
+    {
+        Http::fake(fn () => Http::response(['ok' => false, 'error_code' => 429, 'description' => 'Too Many', 'parameters' => ['retry_after' => 20]], 429));
+        $this->freezeTime();
+        $handler = app(UpdateHandler::class);
+        $handler->handle($this->message('/start'));
+        $this->assertTrue($handler->isWaiting());
+        $this->travel(20)->seconds();
+        $handler->tick();
+        $this->assertFalse($handler->isWaiting());
+        $this->assertSame(2, $this->sent('sendMessage'));
+    }
+
+    public function test_messages_are_sent_in_parallel_but_one_by_one_to_a_chat(): void
+    {
+        $this->fake();
+        foreach ([5, 5, 6, 7, 8, 9, 10] as $i => $id) {
+            Delivery::query()->create(['telegram_id' => $id, 'dedupe_key' => "k{$i}", 'text' => "t{$i}", 'available_at' => now()]);
+        }
+        app(DeliverySender::class)->flush();
+
+        $texts = Http::recorded()->map(fn ($pair) => $pair[0]['text'])->all();
+        $this->assertSame(['t0', 't2', 't3', 't4', 't5', 't1', 't6'], $texts);
+        $this->assertSame(7, Delivery::query()->where('status', Delivery::SENT)->count());
+    }
+
+    public function test_failure_of_one_message_does_not_affect_the_batch(): void
+    {
+        Http::fake(fn ($r) => $r['chat_id'] === 6
+            ? Http::response(['ok' => false, 'error_code' => 403, 'description' => 'Forbidden'], 403)
+            : Http::response(['ok' => true, 'result' => []]));
+        foreach ([5, 6, 7] as $id) {
+            Delivery::query()->create(['telegram_id' => $id, 'dedupe_key' => "k{$id}", 'text' => 't', 'available_at' => now()]);
+        }
+        app(DeliverySender::class)->flush();
+
+        $this->assertSame([Delivery::SENT, Delivery::FAILED, Delivery::SENT], Delivery::query()->orderBy('id')->pluck('status')->all());
+    }
+
+    public function test_urgent_messages_do_not_wait_for_a_broadcast(): void
+    {
+        $this->fake();
+        foreach (['schedule:1' => 60, 'remind:1:1.1:1' => 30, 'remind:1:1.1:2' => 10, 'admin:x' => null] as $key => $minutes) {
+            Delivery::query()->create(['telegram_id' => 5, 'dedupe_key' => $key, 'text' => $key, 'available_at' => now(), 'expires_at' => $minutes ? now()->addMinutes($minutes) : null]);
+        }
+        $texts = fn () => Http::recorded()->map(fn ($pair) => $pair[0]['text'])->all();
+
+        $this->artisan('app:reminders', ['--once' => true])->assertSuccessful();
+        $this->assertSame(['admin:x', 'remind:1:1.1:2', 'remind:1:1.1:1'], $texts());
+        app(DeliverySender::class)->flush(DeliveryChannel::Broadcast);
+        $this->assertSame('schedule:1', $texts()[3]);
     }
 }

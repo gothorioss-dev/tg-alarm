@@ -7,7 +7,7 @@ Telegram-бот: следит за графиками отключений св�
 ```bash
 cp .env.example .env      # заполнить TELEGRAM_BOT_TOKEN и TELEGRAM_ADMIN_ID
 docker compose up -d --build
-docker compose logs -f worker bot
+docker compose logs -f worker reminders bot
 ```
 
 Домен, HTTPS и открытые порты не нужны (long polling). Администратор должен один раз написать боту `/start`, иначе Telegram не доставит служебные сообщения. С одним токеном может работать только одна копия бота.
@@ -26,7 +26,7 @@ docker compose cp worker:/backups/daily-ГГГГ-ММ-ДД.sqlite .       # ск
 Восстановление (текущая база заменяется, её копия остаётся рядом):
 
 ```bash
-docker compose stop worker bot
+docker compose stop worker reminders bot
 docker compose run --rm --no-deps worker sh -c 'cd /data && rm -f before-restore.sqlite && php -r "(new PDO(\"sqlite:database.sqlite\"))->exec(\"VACUUM INTO \\x27before-restore.sqlite\\x27\");" && rm -f database.sqlite-wal database.sqlite-shm && cp /backups/daily-ГГГГ-ММ-ДД.sqlite database.sqlite'
 docker compose up -d --no-build
 ```

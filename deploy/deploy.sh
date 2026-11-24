@@ -6,6 +6,7 @@ previous=$1
 sha=$2
 backup_dir=${BACKUP_DIR:-/opt/zoe-alarm-backups}
 image=zoe-alarm
+services=(worker reminders bot)
 stage=build
 started=
 
@@ -34,7 +35,7 @@ healthy() {
     for _ in $(seq 1 12); do
         sleep 10
         local ok=1
-        for service in worker bot; do
+        for service in "${services[@]}"; do
             id=$(docker compose ps -q "$service")
             [[ -n $id ]] || { ok=0; continue; }
             [[ $(docker inspect -f '{{.State.Running}} {{.RestartCount}}' "$id") == "true 0" ]] || return 1
@@ -51,8 +52,8 @@ healthy() {
 restore() {
     git checkout --quiet --detach "$previous"
     if [[ $stage == start ]]; then
-        docker compose logs --tail 30 worker bot migrate >&2
-        docker tag "$image:previous" "$image:latest" && docker compose up -d --no-build --force-recreate
+        docker compose logs --tail 30 >&2
+        docker tag "$image:previous" "$image:latest" && docker compose up -d --no-build --force-recreate --remove-orphans
     fi
 }
 

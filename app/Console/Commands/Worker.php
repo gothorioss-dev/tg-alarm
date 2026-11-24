@@ -4,7 +4,6 @@ namespace App\Console\Commands;
 
 use App\Backup\DailyBackup;
 use App\Ingest\Poller;
-use App\Ingest\Reminders;
 use App\Telegram\DeliveryCleanup;
 use App\Telegram\DeliverySender;
 use Illuminate\Console\Command;
@@ -16,9 +15,9 @@ class Worker extends Command
 {
     protected $signature = 'app:worker {--once : Run a single cycle}';
 
-    protected $description = 'Poll schedule sources and deliver notifications';
+    protected $description = 'Poll schedule sources and send broadcasts';
 
-    public function handle(Poller $poller, Reminders $reminders, DeliverySender $sender, DailyBackup $backup, DeliveryCleanup $cleanup): int
+    public function handle(Poller $poller, DeliverySender $sender, DailyBackup $backup, DeliveryCleanup $cleanup): int
     {
         $running = true;
         $this->trap([SIGTERM, SIGINT], function () use (&$running) {
@@ -28,7 +27,7 @@ class Worker extends Command
         $until = time() + 6 * 3600;
 
         do {
-            foreach ([$poller->pollDue(...), $reminders->queueDue(...), $sender->flush(...), $backup->runDue(...), $cleanup->runDue(...)] as $step) {
+            foreach ([$poller->pollDue(...), $sender->flush(...), $backup->runDue(...), $cleanup->runDue(...)] as $step) {
                 try {
                     $step();
                 } catch (Throwable $e) {

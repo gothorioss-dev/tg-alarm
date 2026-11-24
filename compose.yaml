@@ -19,10 +19,20 @@ services:
     command: sh -c "touch /data/database.sqlite && php artisan migrate --force"
     restart: "no"
 
-  # Polls the sources and delivers queued notifications.
+  # Polls the sources and delivers broadcasts.
   worker:
     <<: *app
     command: php artisan app:worker
+    stop_grace_period: 60s
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # Sends reminders and service alerts, which must not wait for a broadcast.
+  reminders:
+    <<: *app
+    command: php artisan app:reminders
     stop_grace_period: 60s
     restart: unless-stopped
     depends_on:
