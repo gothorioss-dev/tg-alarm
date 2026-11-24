@@ -16,11 +16,15 @@ final class UpdateHandler
 
     private ?string $botLink = null;
 
-    public function __construct(private TelegramClient $telegram, private Messages $messages, private Statistics $statistics) {}
+    public function __construct(private TelegramClient $telegram, private Messages $messages, private Statistics $statistics, private RateLimiter $limiter) {}
 
     /** @param array<string, mixed> $update */
     public function handle(array $update): void
     {
+        if (! $this->allowed($update)) {
+            return;
+        }
+
         if (isset($update['callback_query'])) {
             $this->callback($update['callback_query']);
         } elseif (isset($update['my_chat_member'])) {
@@ -55,7 +59,13 @@ final class UpdateHandler
             return;
         }
         if (! $chat->subscriptions()->exists()) {
-            $this->welcome($chat);
+            // The guide is not repeated to those who have already got it with the keyboard.
+            if ($chat->keyboard_version === null) {
+                $this->welcome($chat);
+            } else {
+                $this->updateKeyboard($chat, 'queue');
+                $this->open($chat, 'queue');
+            }
 
             return;
         }
@@ -87,7 +97,7 @@ final class UpdateHandler
         [$toast, $alert] = [null, false];
 
         if (str_starts_with($data, 'q:')) {
-            $toast = $this->toggleQueue($chat, substr($data, 2));
+            [$toast, $alert] = $this->toggleQueue($chat, substr($data, 2));
             $data = 'queue';
         } elseif (str_starts_with($data, 'r:')) {
             $toast = $this->setReminder($chat, (int) substr($data, 2));
@@ -221,19 +231,25 @@ final class UpdateHandler
         return $this->render($chat, $this->messages->chooseQueue(), Keyboards::queues($chat), $messageId);
     }
 
-    private function toggleQueue(Chat $chat, string $queue): ?string
+    /** @return array{?string, bool} answer text and whether it is an alert */
+    private function toggleQueue(Chat $chat, string $queue): array
     {
         if (! in_array($queue, Queues::ALL, true)) {
-            return null;
+            return [null, false];
         }
 
         $added = $chat->subscriptions()->where('queue', $queue)->delete() === 0;
 
         if ($added) {
+            // Those who selected more before the limit keep their queues.
+            if ($chat->subscriptions()->count() >= (int) config('telegram.max_queues')) {
+                return [$this->messages->tooManyQueues(), true];
+            }
+
             $chat->subscriptions()->create(['queue' => $queue]);
         }
 
-        return $this->messages->queueToggled($queue, $added);
+        return [$this->messages->queueToggled($queue, $added), false];
     }
 
     private function setReminder(Chat $chat, int $minutes): ?string
@@ -312,5 +328,37 @@ final class UpdateHandler
         } catch (TelegramException) {
             // The query may have expired; the action itself still matters.
         }
+    }
+
+    /**
+     * Excess actions are dropped before any other work; the user is warned once per window.
+     *
+     * @param  array<string, mixed>  $update
+     */
+    private function allowed(array $update): bool
+    {
+        $query = $update['callback_query'] ?? null;
+        $message = $query === null ? ($update['message'] ?? null) : ($query['message'] ?? null);
+
+        // Other updates are either ignored or not caused by user actions in the chat.
+        if ($message === null || $message['chat']['type'] !== 'private' || ($query === null && trim($message['text'] ?? '') === '')) {
+            return true;
+        }
+
+        $chatId = (int) $message['chat']['id'];
+        $limit = (int) config('telegram.rate_limit.actions');
+        $count = $this->limiter->hit($chatId);
+
+        if ($count === $limit + 1) {
+            $text = $this->messages->tooManyActions();
+
+            if ($query === null) {
+                $this->telegram->send($chatId, $text, ['disable_notification' => true]);
+            } else {
+                $this->answer($query['id'], $text, true);
+            }
+        }
+
+        return $count <= $limit;
     }
 }

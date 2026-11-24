@@ -10,4 +10,8 @@ return [
     'remind_minutes' => [10, 15, 30, 60],
     // Records of the delivery log older than this many days are removed.
     'deliveries_keep_days' => max(1, (int) env('DELIVERIES_KEEP_DAYS', 30)),
+    // Protection from floods: actions of one user allowed within this many seconds.
+    'rate_limit' => ['actions' => 20, 'seconds' => 30],
+    // Queues one user can select.
+    'max_queues' => 6,
 ];

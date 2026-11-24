@@ -108,8 +108,9 @@ final class Messages
 
     public function chooseQueue(): string
     {
-        return "<b>Оберіть чергу</b>\n\nНатисніть на номер своєї черги — з'явиться ✅. Потім натисніть «💾 Готово». Можна обрати кілька.\n\n"
-            .'Не знаєте свою чергу? Подивіться <a href="'.e(config('telegram.queue_lookup_url')).'">на сайті Запоріжжяобленерго</a>.';
+        return "<b>Оберіть чергу</b>\n\nНатисніть на номер своєї черги — з'явиться ✅. Потім натисніть «💾 Готово». Можна обрати до {$this->maxQueues()} черг.\n\n"
+            .'Не знаєте свою чергу? Подивіться <a href="'.e(config('telegram.queue_lookup_url')).'">на сайті Запоріжжяобленерго</a>.'
+            ."\n\nПотрібен весь графік? Дивіться у джерелі:\n".$this->sourceLinks();
     }
 
     public function guide(): string
@@ -117,7 +118,7 @@ final class Messages
         return "📖 <b>Довідник</b>\n\n"
             ."Бот надсилає графік відключень світла для вашої черги.\n\n"
             ."<b>Як почати</b>\n"
-            ."1. Натисніть на номер своєї черги — з'явиться ✅. Можна обрати кілька.\n"
+            ."1. Натисніть на номер своєї черги — з'явиться ✅. Можна обрати до {$this->maxQueues()} черг.\n"
             ."2. Натисніть «💾 Готово».\n"
             ."Далі бот сам повідомить про новий графік і зміни.\n\n"
             ."<b>Кнопки внизу</b>\n"
@@ -314,5 +315,24 @@ final class Messages
     private function line(Interval $interval): string
     {
         return '• '.str_replace('–', ' до ', "з {$interval}");
+    }
+
+    /** Shown in an alert: up to 200 characters, no links. */
+    public function tooManyQueues(): string
+    {
+        return "Можна обрати до {$this->maxQueues()} черг. Бот — для тих, кому потрібні кілька конкретних черг. "
+            .'Повний графік дивіться у джерелі: посилання на цьому екрані.';
+    }
+
+    public function tooManyActions(): string
+    {
+        $seconds = (int) config('telegram.rate_limit.seconds');
+
+        return "⏳ Забагато запитів. Зачекайте {$seconds} с і спробуйте ще раз.";
+    }
+
+    private function maxQueues(): int
+    {
+        return (int) config('telegram.max_queues');
     }
 }

@@ -387,4 +387,86 @@ class BotTest extends TestCase
             $this->assertNull($e->getPrevious());
         }
     }
+
+    public function test_flood_is_dropped_with_a_single_warning(): void
+    {
+        $this->fake();
+        config(['telegram.rate_limit' => ['actions' => 3, 'seconds' => 30]]);
+        $this->freezeTime();
+        $handler = app(UpdateHandler::class);
+        $warnings = fn () => Http::recorded(fn ($r) => str_contains($r['text'] ?? '', 'Забагато'))->count();
+
+        foreach (['/start', 'x', '/abc'] as $text) {
+            $handler->handle($this->message($text));
+        }
+        $this->assertSame(0, $warnings());
+
+        $handler->handle($this->message('x'));
+        $sent = Http::recorded()->count();
+        $handler->handle($this->message('/start'));
+        $handler->handle($this->press('q:1.1'));
+        $this->assertSame(1, $warnings());
+        $this->assertCount($sent, Http::recorded());
+        $this->assertSame(0, Chat::query()->sole()->subscriptions()->count());
+
+        // Others are not affected, neither is blocking of the bot.
+        $handler->handle($this->press('q:1.1', id: 6));
+        $this->assertSame(1, Chat::query()->where('telegram_id', 6)->sole()->subscriptions()->count());
+        $handler->handle(['my_chat_member' => ['chat' => ['id' => 5, 'type' => 'private'], 'new_chat_member' => ['status' => 'kicked']]]);
+        $this->assertFalse(Chat::query()->where('telegram_id', 5)->sole()->active);
+
+        $this->travel(30)->seconds();
+        $handler->handle($this->press('q:1.1'));
+        $this->assertSame(1, Chat::query()->where('telegram_id', 5)->sole()->subscriptions()->count());
+    }
+
+    public function test_flood_of_presses_is_answered_with_an_alert(): void
+    {
+        $this->fake();
+        config(['telegram.rate_limit' => ['actions' => 1, 'seconds' => 30]]);
+        $this->freezeTime();
+        $handler = app(UpdateHandler::class);
+
+        foreach (range(1, 3) as $ignored) {
+            $handler->handle($this->press('help'));
+        }
+
+        $this->assertCount(1, Http::recorded(fn ($r) => str_ends_with($r->url(), 'answerCallbackQuery')
+            && str_contains($r['text'] ?? '', 'Забагато') && $r['show_alert'] === true));
+        $this->assertCount(1, Http::recorded(fn ($r) => str_ends_with($r->url(), 'editMessageText')));
+    }
+
+    public function test_text_without_queues_repeats_only_the_selection(): void
+    {
+        $this->fake();
+        $this->update($this->message('привіт'));
+        $this->update($this->message('/abc'));
+
+        $this->assertCount(1, Http::recorded(fn ($r) => str_contains($r['text'] ?? '', '<b>Довідник</b>')));
+        $this->assertCount(2, Http::recorded(fn ($r) => str_ends_with($r->url(), 'sendMessage') && $this->hasButton($r, 'q:1.1')));
+        $this->assertDeleted(60);
+    }
+
+    public function test_number_of_queues_is_limited(): void
+    {
+        $this->fake();
+        config(['telegram.max_queues' => 2]);
+
+        foreach (['q:1.1', 'q:1.2', 'q:2.1'] as $data) {
+            $this->update($this->press($data));
+        }
+
+        $chat = Chat::query()->sole();
+        $selected = fn () => $chat->subscriptions()->orderBy('queue')->pluck('queue')->all();
+        $this->assertSame(['1.1', '1.2'], $selected());
+        Http::assertSent(fn ($r) => ($r['show_alert'] ?? false) === true && str_contains($r['text'], 'до 2 черг') && mb_strlen($r['text']) <= 200);
+        Http::assertSent(fn ($r) => str_ends_with($r->url(), 'editMessageText') && str_contains($r['text'], 't.me/zoe_alarm'));
+
+        // A selection made before the limit is kept and can only be reduced.
+        $chat->subscriptions()->create(['queue' => '6.1']);
+        $this->update($this->press('q:6.2'));
+        $this->assertSame(['1.1', '1.2', '6.1'], $selected());
+        $this->update($this->press('q:1.2'));
+        $this->assertSame(['1.1', '6.1'], $selected());
+    }
 }
