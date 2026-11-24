@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Ingest\Reminders as ReminderQueue;
+use App\Monitor\ProcessStatus;
 use App\Telegram\DeliveryChannel;
 use App\Telegram\DeliverySender;
 use Illuminate\Console\Command;
@@ -16,12 +17,13 @@ class Reminders extends Command
 
     protected $description = 'Send reminders and service alerts independently of broadcasts';
 
-    public function handle(ReminderQueue $reminders, DeliverySender $sender): int
+    public function handle(ReminderQueue $reminders, DeliverySender $sender, ProcessStatus $status): int
     {
         $running = true;
         $this->trap([SIGTERM, SIGINT], function () use (&$running) {
             $running = false;
         });
+        $status->start('reminders');
         // Docker restarts the process, which keeps memory bounded.
         $until = time() + 6 * 3600;
 
@@ -32,6 +34,7 @@ class Reminders extends Command
                 } catch (Throwable $e) {
                     Log::error("Reminders step failed: {$e->getMessage()}");
                 }
+                $status->beat();
             }
 
             if ($this->option('once')) {

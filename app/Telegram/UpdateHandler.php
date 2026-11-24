@@ -4,6 +4,7 @@ namespace App\Telegram;
 
 use App\Models\Chat;
 use App\Models\SourceState;
+use App\Monitor\ProcessStatus;
 use App\Schedule\OutageTimeline;
 use App\Schedule\Queues;
 use Illuminate\Support\Facades\Log;
@@ -21,7 +22,7 @@ final class UpdateHandler
     /** @var array<int, array{screen: string, message: ?int, due: int, until: int}> replies delayed by a Telegram limit by chat id, time in seconds */
     private array $delayed = [];
 
-    public function __construct(private TelegramClient $telegram, private Messages $messages, private Statistics $statistics, private RateLimiter $limiter, private PressSeries $series) {}
+    public function __construct(private TelegramClient $telegram, private Messages $messages, private Statistics $statistics, private RateLimiter $limiter, private PressSeries $series, private ProcessStatus $status) {}
 
     /** @param array<string, mixed> $update */
     public function handle(array $update): void
@@ -356,6 +357,7 @@ final class UpdateHandler
         $count = $this->limiter->hit($chatId);
 
         if ($count === $limit + 1) {
+            $this->status->flood($chatId);
             $text = $this->messages->tooManyActions();
 
             if ($query === null) {

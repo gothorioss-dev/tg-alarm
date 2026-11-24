@@ -2,6 +2,9 @@
 
 namespace App\Console\Commands;
 
+use App\Monitor\Alerts;
+use App\Monitor\Checks;
+use App\Monitor\ProcessStatus;
 use App\Telegram\Messages;
 use App\Telegram\TelegramClient;
 use App\Telegram\TelegramException;
@@ -17,12 +20,14 @@ class Bot extends Command
 
     protected $description = 'Handle Telegram updates via long polling';
 
-    public function handle(TelegramClient $telegram, UpdateHandler $handler, Messages $messages): int
+    public function handle(TelegramClient $telegram, UpdateHandler $handler, Messages $messages, ProcessStatus $status, Checks $checks, Alerts $alerts): int
     {
         $running = true;
         $this->trap([SIGTERM, SIGINT], function () use (&$running) {
             $running = false;
         });
+
+        $status->start('bot');
 
         try {
             $telegram->call('getMe');
@@ -38,10 +43,19 @@ class Bot extends Command
 
         $this->describe($telegram, $messages);
         $offset = 0;
+        $nextCheck = 0;
         // Docker restarts the process, which keeps memory bounded.
         $until = time() + 6 * 3600;
 
         while ($running && time() < $until) {
+            $status->beat();
+
+            // The monitor watches everything except itself.
+            if (time() >= $nextCheck) {
+                $nextCheck = time() + (int) config('monitor.interval');
+                rescue(fn () => $alerts->update('alerts-bot', $checks->monitor()));
+            }
+
             try {
                 $updates = $telegram->call('getUpdates', [
                     'offset' => $offset,
@@ -58,6 +72,10 @@ class Bot extends Command
 
             foreach ($updates as $update) {
                 $offset = $update['update_id'] + 1;
+                $status->beat();
+
+                // Button presses carry no time, so they are judged by their number.
+                $status->lag(max(0, time() - ($update['message']['date'] ?? time())), count($updates));
 
                 try {
                     $handler->handle($update);

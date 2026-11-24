@@ -15,5 +15,5 @@ FROM base AS production
 RUN adduser -D -u 1000 app && mkdir /data /backups && chown app:app /data /backups && chmod 700 /backups
 COPY --from=vendor --chown=app:app /app /app
 USER app
-ENV DB_DATABASE=/data/database.sqlite BACKUP_PATH=/backups
+ENV DB_DATABASE=/data/database.sqlite BACKUP_PATH=/backups MONITOR_PATH=/data/status
 CMD ["php", "artisan", "list"]

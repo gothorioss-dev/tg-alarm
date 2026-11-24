@@ -39,6 +39,16 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  # Watches the server and other processes and alerts the admin.
+  monitor:
+    <<: *app
+    command: php artisan app:monitor
+    stop_grace_period: 30s
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
   # Handles user commands via long polling.
   bot:
     <<: *app

@@ -4,6 +4,7 @@ namespace App\Telegram;
 
 use App\Models\Chat;
 use App\Models\Delivery;
+use App\Monitor\ProcessStatus;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Sleep;
@@ -12,7 +13,7 @@ final class DeliverySender
 {
     private const MAX_ATTEMPTS = 12;
 
-    public function __construct(private TelegramClient $telegram) {}
+    public function __construct(private TelegramClient $telegram, private ProcessStatus $status) {}
 
     public function flush(DeliveryChannel $channel = DeliveryChannel::Broadcast, int $limit = 200): void
     {
@@ -24,6 +25,9 @@ final class DeliverySender
         while ($queue !== []) {
             $started = microtime(true);
             $ids = $this->takeBatch($queue);
+
+            // A long run is not a hang.
+            $this->status->beat();
 
             if (! $this->sendBatch($ids)) {
                 return;

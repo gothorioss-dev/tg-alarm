@@ -3,6 +3,7 @@
 namespace App\Ingest;
 
 use App\Models\SourceState;
+use App\Monitor\ProcessStatus;
 use App\Sources\FetchResult;
 use App\Sources\SourceRegistry;
 use Illuminate\Support\Facades\Log;
@@ -14,6 +15,7 @@ final class Poller
         private SourceRegistry $sources,
         private Ingestor $ingestor,
         private Outbox $outbox,
+        private ProcessStatus $status,
     ) {}
 
     public function pollDue(): void
@@ -29,6 +31,7 @@ final class Poller
                 continue;
             }
 
+            $this->status->beat();
             $state->polled_at = now();
 
             try {

@@ -6,7 +6,7 @@ previous=$1
 sha=$2
 backup_dir=${BACKUP_DIR:-/opt/zoe-alarm-backups}
 image=zoe-alarm
-services=(worker reminders bot)
+services=(worker reminders monitor bot)
 stage=build
 started=
 
