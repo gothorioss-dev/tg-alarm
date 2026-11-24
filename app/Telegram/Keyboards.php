@@ -87,12 +87,18 @@ final class Keyboards
         ]];
     }
 
-    /** @return array<string, mixed> */
+    /**
+     * A button carries the wanted state, so a repeated press changes nothing.
+     *
+     * @return array<string, mixed>
+     */
     public static function queues(Chat $chat): array
     {
         $selected = $chat->subscriptions()->pluck('queue')->all();
         $buttons = array_map(
-            fn (string $queue) => self::inline((in_array($queue, $selected, true) ? '✅ ' : '').$queue, "q:{$queue}"),
+            fn (string $queue) => in_array($queue, $selected, true)
+                ? self::inline("✅ {$queue}", "q-:{$queue}")
+                : self::inline($queue, "q+:{$queue}"),
             Queues::ALL,
         );
 

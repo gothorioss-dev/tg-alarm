@@ -125,7 +125,7 @@ class BotTest extends TestCase
 
     private function assertDeleted(int $id, bool $deleted = true): void
     {
-        $check = fn ($r) => str_ends_with($r->url(), 'deleteMessage') && $r['message_id'] === $id;
+        $check = fn ($r) => str_ends_with($r->url(), 'deleteMessages') && in_array($id, $r['message_ids'], true);
         $deleted ? Http::assertSent($check) : Http::assertNotSent($check);
     }
 
@@ -182,7 +182,7 @@ class BotTest extends TestCase
             $this->update($this->message($button['text']));
         }
 
-        Http::assertSent(fn ($r) => $this->hasButton($r, 'q:1.1'));
+        Http::assertSent(fn ($r) => $this->hasButton($r, 'q-:1.1'));
         Http::assertSent(fn ($r) => $this->hasButton($r, 'r:30'));
         Http::assertSent(fn ($r) => str_contains($r['text'] ?? '', 'Довідник'));
     }
@@ -240,7 +240,7 @@ class BotTest extends TestCase
         $chat->update(['keyboard_version' => 'old']);
         $this->update($this->message(Keyboards::SCHEDULE));
         $this->assertSame(2, $this->keyboardMessages());
-        Http::assertSentCount(9);
+        Http::assertSentCount(7);
     }
 
     public function test_repeated_start_shows_the_selection_and_keeps_queues(): void
@@ -396,7 +396,7 @@ class BotTest extends TestCase
         $handler = app(UpdateHandler::class);
         $warnings = fn () => Http::recorded(fn ($r) => str_contains($r['text'] ?? '', 'Забагато'))->count();
 
-        foreach (['/start', 'x', '/abc'] as $text) {
+        foreach (['/start', 'x', Keyboards::GUIDE] as $text) {
             $handler->handle($this->message($text));
         }
         $this->assertSame(0, $warnings());
@@ -427,8 +427,8 @@ class BotTest extends TestCase
         $this->freezeTime();
         $handler = app(UpdateHandler::class);
 
-        foreach (range(1, 3) as $ignored) {
-            $handler->handle($this->press('help'));
+        foreach (['help', 'settings', 'help'] as $data) {
+            $handler->handle($this->press($data));
         }
 
         $this->assertCount(1, Http::recorded(fn ($r) => str_ends_with($r->url(), 'answerCallbackQuery')
@@ -443,7 +443,7 @@ class BotTest extends TestCase
         $this->update($this->message('/abc'));
 
         $this->assertCount(1, Http::recorded(fn ($r) => str_contains($r['text'] ?? '', '<b>Довідник</b>')));
-        $this->assertCount(2, Http::recorded(fn ($r) => str_ends_with($r->url(), 'sendMessage') && $this->hasButton($r, 'q:1.1')));
+        $this->assertCount(2, Http::recorded(fn ($r) => str_ends_with($r->url(), 'sendMessage') && $this->hasButton($r, 'q+:1.1')));
         $this->assertDeleted(60);
     }
 
@@ -468,5 +468,85 @@ class BotTest extends TestCase
         $this->assertSame(['1.1', '1.2', '6.1'], $selected());
         $this->update($this->press('q:1.2'));
         $this->assertSame(['1.1', '6.1'], $selected());
+    }
+
+    private function sent(string $method, ?string $text = null): int
+    {
+        return Http::recorded(fn ($r) => str_ends_with($r->url(), $method) && ($text === null || str_contains($r['text'] ?? '', $text)))->count();
+    }
+
+    public function test_repeated_menu_presses_give_one_screen_and_leave_no_clutter(): void
+    {
+        $this->fake();
+        $this->freezeTime();
+        config(['telegram.rate_limit' => ['actions' => 3, 'seconds' => 30]]);
+        Chat::query()->create(['telegram_id' => 5, 'type' => 'private'])->subscriptions()->create(['queue' => '1.1']);
+        $handler = app(UpdateHandler::class);
+
+        foreach (range(101, 110) as $id) {
+            $handler->handle($this->message(Keyboards::SCHEDULE, extra: ['message_id' => $id]));
+            $this->travel(2)->seconds();
+        }
+        // Any other text leads to the same schedule.
+        $handler->handle($this->message('привіт', extra: ['message_id' => 111]));
+        $this->assertSame(1, $this->sent('sendMessage'));
+
+        $handler->tick();
+        $this->assertTrue($handler->isWaiting());
+        $this->travel(3)->seconds();
+        $handler->tick();
+        $this->assertFalse($handler->isWaiting());
+        Http::assertSent(fn ($r) => str_ends_with($r->url(), 'deleteMessages') && $r['message_ids'] === range(102, 110));
+
+        $handler->handle($this->message(Keyboards::SCHEDULE));
+        $this->assertSame(2, $this->sent('sendMessage'));
+        $handler->handle($this->message(Keyboards::GUIDE));
+        $handler->handle($this->message(Keyboards::SCHEDULE));
+        $this->assertSame(1, $this->sent('sendMessage', 'Довідник'));
+        // Repeats are not counted: the fourth action is the first one over the limit.
+        $this->assertSame(1, $this->sent('sendMessage', 'Забагато'));
+    }
+
+    public function test_repeated_queue_presses_keep_the_choice(): void
+    {
+        $this->fake();
+        $this->freezeTime();
+        $handler = app(UpdateHandler::class);
+        $queues = fn () => Chat::query()->sole()->subscriptions()->pluck('queue')->all();
+
+        // The button turns into the opposite one after the first press.
+        foreach (['q+:1.1', 'q-:1.1', 'q+:1.1', 'q-:1.1', 'q+:2.1', 'q+:3.1'] as $data) {
+            $handler->handle($this->press($data));
+        }
+        $this->assertSame(['1.1', '2.1', '3.1'], $queues());
+        $this->assertSame(6, $this->sent('answerCallbackQuery'));
+        $this->assertSame(3, $this->sent('editMessageText'));
+
+        // A late repeat of the same press changes nothing, the opposite one does.
+        $this->travel(2)->seconds();
+        $handler->handle($this->press('q+:3.1'));
+        $this->assertSame(['1.1', '2.1', '3.1'], $queues());
+        $this->travel(2)->seconds();
+        $handler->handle($this->press('q-:3.1'));
+        $this->assertSame(['1.1', '2.1'], $queues());
+
+        $handler->handle($this->press('mute'));
+        $handler->handle($this->press('sound'));
+        $this->assertTrue(Chat::query()->sole()->silent);
+    }
+
+    public function test_failed_action_can_be_repeated_at_once_and_start_works_after_unblocking(): void
+    {
+        Http::fakeSequence()->push(['ok' => false, 'error_code' => 500, 'description' => 'x'], 500)
+            ->whenEmpty(Http::response(['ok' => true, 'result' => ['message_id' => 60]]));
+        $this->freezeTime();
+        $handler = app(UpdateHandler::class);
+        rescue(fn () => $handler->handle($this->message('/start')), report: false);
+        $handler->handle($this->message('/start'));
+        $this->assertSame(2, $this->sent('sendMessage', 'Довідник'));
+
+        $handler->handle(['my_chat_member' => ['chat' => ['id' => 5, 'type' => 'private'], 'new_chat_member' => ['status' => 'kicked']]]);
+        $handler->handle($this->message('/start'));
+        $this->assertTrue(Chat::query()->sole()->active);
     }
 }

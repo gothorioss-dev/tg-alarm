@@ -2,11 +2,15 @@
 
 namespace App\Telegram;
 
+use GuzzleHttp\Utils;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 
 class TelegramClient
 {
+    /** @var callable|null shared by all requests so that the connection stays open */
+    private $handler = null;
+
     /** @param array<string, mixed> $params */
     public function call(string $method, array $params = [], int $timeout = 20): mixed
     {
@@ -17,7 +21,8 @@ class TelegramClient
         }
 
         try {
-            $response = Http::timeout($timeout)->connectTimeout(10)->asJson()
+            $response = Http::setHandler($this->handler ??= Utils::chooseHandler())
+                ->timeout($timeout)->connectTimeout(10)->asJson()
                 ->post("https://api.telegram.org/bot{$token}/{$method}", $params);
         } catch (ConnectionException $e) {
             // The original exception contains the URL with the token, so it is not chained.

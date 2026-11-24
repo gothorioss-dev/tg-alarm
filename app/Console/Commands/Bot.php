@@ -46,7 +46,7 @@ class Bot extends Command
                 $updates = $telegram->call('getUpdates', [
                     'offset' => $offset,
                     // A stop signal is handled only after the request returns, so it is kept short.
-                    'timeout' => 10,
+                    'timeout' => $handler->isWaiting() ? 1 : 10,
                     'allowed_updates' => ['message', 'callback_query', 'my_chat_member'],
                 ], 20);
             } catch (TelegramException $e) {
@@ -65,7 +65,11 @@ class Bot extends Command
                     Log::error("Update {$update['update_id']} failed: {$e->getMessage()}");
                 }
             }
+
+            rescue(fn () => $handler->tick(), report: false);
         }
+
+        rescue(fn () => $handler->tick(last: true), report: false);
 
         // Acknowledge processed updates so they are not handled again after a restart.
         if ($offset > 0) {

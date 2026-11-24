@@ -12,6 +12,9 @@ return [
     'deliveries_keep_days' => max(1, (int) env('DELIVERIES_KEEP_DAYS', 30)),
     // Protection from floods: actions of one user allowed within this many seconds.
     'rate_limit' => ['actions' => 20, 'seconds' => 30],
+    // Presses of the same button are one action until a pause of this many seconds:
+    // "screen" for buttons that show something, "choice" for those that switch a setting.
+    'repeat_pause' => ['screen' => 3, 'choice' => 2],
     // Queues one user can select.
     'max_queues' => 5,
 ];

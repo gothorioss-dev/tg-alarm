@@ -16,34 +16,54 @@ final class UpdateHandler
 
     private ?string $botLink = null;
 
-    public function __construct(private TelegramClient $telegram, private Messages $messages, private Statistics $statistics, private RateLimiter $limiter) {}
+    public function __construct(private TelegramClient $telegram, private Messages $messages, private Statistics $statistics, private RateLimiter $limiter, private PressSeries $series) {}
 
     /** @param array<string, mixed> $update */
     public function handle(array $update): void
     {
-        if (! $this->allowed($update)) {
+        if (isset($update['my_chat_member'])) {
+            $this->membership($update['my_chat_member']);
+
             return;
         }
 
-        if (isset($update['callback_query'])) {
-            $this->callback($update['callback_query']);
-        } elseif (isset($update['my_chat_member'])) {
-            $this->membership($update['my_chat_member']);
-        } elseif (isset($update['message'])) {
-            $this->message($update['message']);
+        $query = $update['callback_query'] ?? null;
+        $message = $query === null ? ($update['message'] ?? null) : ($query['message'] ?? null);
+
+        // Only private chats are supported.
+        if ($message === null || $message['chat']['type'] !== 'private' || ($query === null && trim($message['text'] ?? '') === '')) {
+            return;
         }
+
+        $chatId = (int) $message['chat']['id'];
+        [$key, $pause] = $query === null ? $this->messageSeries($message) : $this->querySeries($query);
+        $repeated = $this->series->isRepeat($chatId, $key, $pause);
+
+        // Repeated messages cost nothing, so they are not limited.
+        if ($repeated && $query === null) {
+            if (Keyboards::screen(trim($message['text']), $chatId) !== null) {
+                $this->series->collect($chatId, (int) $message['message_id']);
+            }
+
+            return;
+        }
+        if (! $this->allowed($chatId, $query)) {
+            return;
+        }
+        if ($repeated) {
+            $this->answer($query['id']);
+
+            return;
+        }
+
+        $query === null ? $this->message($message) : $this->callback($query);
+        $this->series->start($chatId, $key, $pause);
     }
 
     /** @param array<string, mixed> $message */
     private function message(array $message): void
     {
-        $text = trim($message['text'] ?? '');
-
-        // Only private chats are supported.
-        if ($message['chat']['type'] !== 'private' || $text === '') {
-            return;
-        }
-
+        $text = trim($message['text']);
         $chat = $this->chat((int) $message['chat']['id']);
 
         if (preg_match('/^\/start(\s|$)/', $text)) {
@@ -53,8 +73,7 @@ final class UpdateHandler
         }
         if ($screen = Keyboards::screen($text, $chat->telegram_id)) {
             $this->updateKeyboard($chat, $screen);
-            $this->open($chat, $screen);
-            $this->delete($chat, (int) $message['message_id']);
+            $this->open($chat, $screen, (int) $message['message_id']);
 
             return;
         }
@@ -76,14 +95,8 @@ final class UpdateHandler
     /** @param array<string, mixed> $query */
     private function callback(array $query): void
     {
-        $message = $query['message'] ?? null;
-
-        if ($message === null || $message['chat']['type'] !== 'private') {
-            return;
-        }
-
-        $chat = $this->chat((int) $message['chat']['id']);
-        $messageId = (int) $message['message_id'];
+        $chat = $this->chat((int) $query['message']['chat']['id']);
+        $messageId = (int) $query['message']['message_id'];
         $data = (string) ($query['data'] ?? '');
 
         if (str_starts_with($data, self::LEGACY_NEW_PREFIX)) {
@@ -96,8 +109,8 @@ final class UpdateHandler
         $data = self::LEGACY[$data] ?? $data;
         [$toast, $alert] = [null, false];
 
-        if (str_starts_with($data, 'q:')) {
-            [$toast, $alert] = $this->toggleQueue($chat, substr($data, 2));
+        if (preg_match('/^q([+-]?):(.*)$/', $data, $match)) {
+            [$toast, $alert] = $this->selectQueue($chat, $match[2], $match[1]);
             $data = 'queue';
         } elseif (str_starts_with($data, 'r:')) {
             $toast = $this->setReminder($chat, (int) substr($data, 2));
@@ -129,6 +142,7 @@ final class UpdateHandler
     private function membership(array $member): void
     {
         $chatId = (int) $member['chat']['id'];
+        $this->series->forget($chatId);
 
         if (in_array($member['new_chat_member']['status'], ['kicked', 'left'], true)) {
             Chat::query()->where('telegram_id', $chatId)->update([
@@ -172,8 +186,8 @@ final class UpdateHandler
         return (int) ($sent['message_id'] ?? 0);
     }
 
-    /** Replaces the previous service screen; schedules stay in the chat. */
-    private function open(Chat $chat, string $screen): void
+    /** Replaces the previous service screen and the pressed button; schedules stay in the chat. */
+    private function open(Chat $chat, string $screen, ?int $pressedId = null): void
     {
         // Without queues the selection is shown instead of the schedule.
         if ($screen === 'schedule' && ! $chat->subscriptions()->exists()) {
@@ -184,9 +198,7 @@ final class UpdateHandler
         $shown = $this->show($chat, $screen);
         $chat->update(['menu_message_id' => $screen === 'schedule' ? null : $shown]);
 
-        if ($previous !== null) {
-            $this->delete($chat, $previous);
-        }
+        $this->delete($chat->telegram_id, array_values(array_filter([$previous, $pressedId])));
     }
 
     /** @return int id of the shown message */
@@ -232,15 +244,19 @@ final class UpdateHandler
     }
 
     /** @return array{?string, bool} answer text and whether it is an alert */
-    private function toggleQueue(Chat $chat, string $queue): array
+    private function selectQueue(Chat $chat, string $queue, string $sign): array
     {
         if (! in_array($queue, Queues::ALL, true)) {
             return [null, false];
         }
 
-        $added = $chat->subscriptions()->where('queue', $queue)->delete() === 0;
+        $exists = $chat->subscriptions()->where('queue', $queue)->exists();
+        // Buttons of messages sent by earlier versions have no sign and switch the queue.
+        $added = $sign === '' ? ! $exists : $sign === '+';
 
-        if ($added) {
+        if (! $added) {
+            $chat->subscriptions()->where('queue', $queue)->delete();
+        } elseif (! $exists) {
             // Those who selected more before the limit keep their queues.
             if ($chat->subscriptions()->count() >= (int) config('telegram.max_queues')) {
                 return [$this->messages->tooManyQueues(), true];
@@ -300,10 +316,13 @@ final class UpdateHandler
         return (int) ($this->telegram->send($chat->telegram_id, $text, ['disable_notification' => $chat->silent, ...$extra])['message_id'] ?? 0);
     }
 
-    private function delete(Chat $chat, int $messageId): void
+    /** @param list<int> $messageIds */
+    private function delete(int $chatId, array $messageIds): void
     {
         try {
-            $this->telegram->call('deleteMessage', ['chat_id' => $chat->telegram_id, 'message_id' => $messageId]);
+            foreach (array_chunk($messageIds, 100) as $ids) {
+                $this->telegram->call('deleteMessages', ['chat_id' => $chatId, 'message_ids' => $ids]);
+            }
         } catch (TelegramException) {
             // Cleanup only: the message may be already deleted or too old.
         }
@@ -333,19 +352,10 @@ final class UpdateHandler
     /**
      * Excess actions are dropped before any other work; the user is warned once per window.
      *
-     * @param  array<string, mixed>  $update
+     * @param  array<string, mixed>|null  $query
      */
-    private function allowed(array $update): bool
+    private function allowed(int $chatId, ?array $query): bool
     {
-        $query = $update['callback_query'] ?? null;
-        $message = $query === null ? ($update['message'] ?? null) : ($query['message'] ?? null);
-
-        // Other updates are either ignored or not caused by user actions in the chat.
-        if ($message === null || $message['chat']['type'] !== 'private' || ($query === null && trim($message['text'] ?? '') === '')) {
-            return true;
-        }
-
-        $chatId = (int) $message['chat']['id'];
         $limit = (int) config('telegram.rate_limit.actions');
         $count = $this->limiter->hit($chatId);
 
@@ -360,5 +370,53 @@ final class UpdateHandler
         }
 
         return $count <= $limit;
+    }
+
+    /**
+     * Messages with the same result belong to the same series.
+     *
+     * @param  array<string, mixed>  $message
+     * @return array{string, int} series key and pause
+     */
+    private function messageSeries(array $message): array
+    {
+        $text = trim($message['text']);
+        $screen = preg_match('/^\/start(\s|$)/', $text) ? 'start' : Keyboards::screen($text, (int) $message['chat']['id']);
+
+        return ['message:'.($screen ?? 'schedule'), (int) config('telegram.repeat_pause.screen')];
+    }
+
+    /**
+     * A button that switches a setting becomes the opposite one, still in the same series.
+     *
+     * @param  array<string, mixed>  $query
+     * @return array{string, int} series key and pause
+     */
+    private function querySeries(array $query): array
+    {
+        $data = (string) ($query['data'] ?? '');
+
+        if ($data === 'mute' || $data === 'sound') {
+            return ['sound', (int) config('telegram.repeat_pause.choice')];
+        }
+        if (preg_match('/^q[+-]?:(.*)$/', $data, $match)) {
+            return ["queue:{$match[1]}", (int) config('telegram.repeat_pause.choice')];
+        }
+
+        return ["{$query['message']['message_id']}:{$data}", (int) config('telegram.repeat_pause.screen')];
+    }
+
+    /** There is delayed work to do by tick(). */
+    public function isWaiting(): bool
+    {
+        return $this->series->hasMessages();
+    }
+
+    /** Does delayed work; called regularly. */
+    public function tick(bool $last = false): void
+    {
+        foreach ($this->series->takeMessages($last) as $chatId => $messageIds) {
+            $this->delete($chatId, $messageIds);
+        }
     }
 }
