@@ -13,5 +13,5 @@ return [
     // Protection from floods: actions of one user allowed within this many seconds.
     'rate_limit' => ['actions' => 20, 'seconds' => 30],
     // Queues one user can select.
-    'max_queues' => 6,
+    'max_queues' => 5,
 ];
