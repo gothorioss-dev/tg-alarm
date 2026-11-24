@@ -1,18 +1,32 @@
 #!/usr/bin/env bash
-# Builds and starts the checked out release; on failure restores the previous one.
+# Downloads the image built by CI and starts the release; on failure restores the previous one.
 set -uo pipefail
 
 previous=$1
 sha=$2
 backup_dir=${BACKUP_DIR:-/opt/zoe-alarm-backups}
 image=zoe-alarm
+registry=${REGISTRY_IMAGE:-ghcr.io/gothorioss-dev/tg-alarm}
 services=(worker reminders monitor bot)
-stage=build
+stage=pull
 started=
 
 notify() {
     docker compose run --rm --no-deps -T worker php artisan app:notify "$1" </dev/null >/dev/null 2>&1 ||
         echo "Notification was not sent" >&2
+}
+
+pull() {
+    local attempt
+    for attempt in 1 2 3; do
+        if docker pull --quiet "$registry:$sha"; then
+            # The registry tag is dropped so that outdated images can be pruned.
+            docker tag "$registry:$sha" "$image:latest" && docker rmi "$registry:$sha" >/dev/null
+            return
+        fi
+        sleep 5
+    done
+    return 1
 }
 
 backup() {
@@ -59,8 +73,7 @@ restore() {
 
 main() {
     docker tag "$image:latest" "$image:previous" || return 1
-    # Built one service at a time: they share an image and the server is small.
-    docker compose build --quiet migrate || { docker tag "$image:previous" "$image:latest"; return 1; }
+    pull || return 1
     stage=backup
     backup || { docker tag "$image:previous" "$image:latest"; return 1; }
     stage=start
@@ -71,6 +84,7 @@ main() {
 
 if main; then
     docker image prune -f >/dev/null
+    # Builds made on the server by hand.
     docker builder prune -f --filter until=168h >/dev/null
     notify "Деплой ${sha:0:7} успішний"
     echo "Deployed $sha"

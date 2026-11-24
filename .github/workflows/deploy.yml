@@ -25,10 +25,33 @@ jobs:
       - name: Tests
         run: docker run --rm -v "$PWD":/app -w /app zoe-alarm-dev vendor/bin/phpunit
       - name: Build production image
+        if: github.event_name == 'pull_request'
         run: docker build --target production -t zoe-alarm .
 
-  deploy:
+  image:
     needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build and publish the production image
+        env:
+          TOKEN: ${{ github.token }}
+          IMAGE: ghcr.io/gothorioss-dev/tg-alarm
+        run: |
+          echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker build --target production \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            -t "$IMAGE:$GITHUB_SHA" .
+          docker push "$IMAGE:$GITHUB_SHA"
+          docker logout ghcr.io
+
+  deploy:
+    needs: image
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
