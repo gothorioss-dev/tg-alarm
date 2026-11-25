@@ -318,6 +318,7 @@ class AddressTest extends TestCase
         $this->say('8 Березня');
         $this->say('12');
         $this->assertSame(3, Address::query()->count());
+        config(['addresses.max_addresses' => 3]);
         $this->press('a+');
         Http::assertSent(fn ($r) => str_contains($r['text'] ?? '', 'до 3 адрес') && ($r['show_alert'] ?? false));
         $this->assertNull($this->chat->refresh()->address_draft);

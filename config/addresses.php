@@ -4,7 +4,7 @@ use App\Address\GoogleScriptSource;
 
 return [
     /* Addresses one user can follow. */
-    'max_addresses' => 3,
+    'max_addresses' => 5,
 
     /* Seconds between polls of outages and of the list of streets. */
     'interval' => 120,
