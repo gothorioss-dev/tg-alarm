@@ -7,7 +7,7 @@ sha=$2
 backup_dir=${BACKUP_DIR:-/opt/zoe-alarm-backups}
 image=zoe-alarm
 registry=${REGISTRY_IMAGE:-ghcr.io/gothorioss-dev/tg-alarm}
-services=(worker reminders monitor bot)
+services=(worker reminders addresses monitor bot)
 stage=pull
 started=
 

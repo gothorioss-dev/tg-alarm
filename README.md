@@ -7,7 +7,7 @@ Telegram-бот: следит за графиками отключений св�
 ```bash
 cp .env.example .env      # заполнить TELEGRAM_BOT_TOKEN и TELEGRAM_ADMIN_ID
 docker compose up -d --build
-docker compose logs -f worker reminders monitor bot
+docker compose logs -f worker reminders addresses monitor bot
 ```
 
 Домен, HTTPS и открытые порты не нужны (long polling). Администратор должен один раз написать боту `/start`, иначе Telegram не доставит служебные сообщения. С одним токеном может работать только одна копия бота.
@@ -26,7 +26,7 @@ docker compose cp worker:/backups/daily-ГГГГ-ММ-ДД.sqlite .       # ск
 Восстановление (текущая база заменяется, её копия остаётся рядом):
 
 ```bash
-docker compose stop worker reminders monitor bot
+docker compose stop worker reminders addresses monitor bot
 docker compose run --rm --no-deps worker sh -c 'cd /data && rm -f before-restore.sqlite && php -r "(new PDO(\"sqlite:database.sqlite\"))->exec(\"VACUUM INTO \\x27before-restore.sqlite\\x27\");" && rm -f database.sqlite-wal database.sqlite-shm && cp /backups/daily-ГГГГ-ММ-ДД.sqlite database.sqlite'
 docker compose up -d --no-build
 ```
@@ -66,6 +66,7 @@ docker compose up -d --no-build
 
 Кнопка «🚨 Відключення за адресою»: аварии, срочные и плановые ремонты по улице и дому (экспериментально). Без выбранной очереди недоступно, как и всё, кроме выбора очереди и справки: правила в `App\Telegram\Access`. Настройка: `config/addresses.php`.
 
+- Отдельный процесс `addresses` (лимит памяти 128 МБ) со своей очередью отправки: его сбои не задерживают графики.
 - Источник — канал ZOE_Alarm: пост с файлом `…ЗМЕМ….xlsx` открывает отключение, тот же файл позже подтверждает начало, ответы продлевают и закрывают его.
 - Файл скачивается через админ-чат: бот отправляет его администратору по ссылке на пост (`sendDocument`), читает и сразу удаляет сообщение. Нужен `TELEGRAM_ADMIN_ID` и `/start` администратора. Способ Telegram не документирован; если он перестанет работать, администратор получит сообщение по каждому такому посту.
 - Страница облэнерго (Google Apps Script) — только справочник улиц и домов. Наружу передаётся название улицы без пользователя и номера дома.

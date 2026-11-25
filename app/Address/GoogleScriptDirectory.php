@@ -9,21 +9,18 @@ use Illuminate\Support\Facades\Http;
 /** Calls the public functions of a Google Apps Script page, as the page itself does. */
 final class GoogleScriptDirectory implements StreetDirectory
 {
-    private const STREETS_TIMEOUT = 20;
-
-    /** The user waits for the houses, and so do other users. */
-    private const HOUSES_TIMEOUT = 5;
+    private const TIMEOUT = 20;
 
     public function __construct(private string $url) {}
 
     public function streets(): array
     {
-        return $this->strings($this->call('getStreetList', [], self::STREETS_TIMEOUT));
+        return $this->strings($this->call('getStreetList', [], self::TIMEOUT));
     }
 
     public function houses(string $street): array
     {
-        return $this->strings($this->call('getBuildingsForStreet', [$street], self::HOUSES_TIMEOUT));
+        return $this->strings($this->call('getBuildingsForStreet', [$street], self::TIMEOUT));
     }
 
     /**

@@ -5,7 +5,7 @@ return [
     'path' => env('MONITOR_PATH'),
 
     /* Processes that must be alive. */
-    'services' => ['worker', 'reminders', 'bot'],
+    'services' => ['worker', 'reminders', 'addresses', 'bot'],
 
     /* Seconds between checks. */
     'interval' => 60,

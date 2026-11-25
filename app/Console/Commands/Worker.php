@@ -2,7 +2,6 @@
 
 namespace App\Console\Commands;
 
-use App\Address\CityPoller;
 use App\Backup\DailyBackup;
 use App\Ingest\Poller;
 use App\Monitor\ProcessStatus;
@@ -19,7 +18,7 @@ class Worker extends Command
 
     protected $description = 'Poll schedule sources and send broadcasts';
 
-    public function handle(Poller $poller, CityPoller $cities, DeliverySender $sender, DailyBackup $backup, DeliveryCleanup $cleanup, ProcessStatus $status): int
+    public function handle(Poller $poller, DeliverySender $sender, DailyBackup $backup, DeliveryCleanup $cleanup, ProcessStatus $status): int
     {
         $running = true;
         $this->trap([SIGTERM, SIGINT], function () use (&$running) {
@@ -30,7 +29,7 @@ class Worker extends Command
         $until = time() + 6 * 3600;
 
         do {
-            foreach ([$poller->pollDue(...), $sender->flush(...), $cities->pollDue(...), $sender->flush(...), $backup->runDue(...), $cleanup->runDue(...)] as $step) {
+            foreach ([$poller->pollDue(...), $sender->flush(...), $backup->runDue(...), $cleanup->runDue(...)] as $step) {
                 try {
                     $step();
                 } catch (Throwable $e) {

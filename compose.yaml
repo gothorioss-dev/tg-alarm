@@ -39,6 +39,17 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  # Follows outages by address; must not affect the others.
+  addresses:
+    <<: *app
+    command: php artisan app:addresses
+    mem_limit: 128m
+    stop_grace_period: 60s
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
   # Watches the server and other processes and alerts the admin.
   monitor:
     <<: *app

@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Address\AddressReminders;
 use App\Address\AddressText;
 use App\Address\CityPoller;
+use App\Address\HouseDirectory;
 use App\Models\Address;
 use App\Models\AddressEvent;
 use App\Models\ChannelPost;
@@ -14,6 +15,7 @@ use App\Models\CityEvent;
 use App\Models\Delivery;
 use App\Models\Street;
 use App\Monitor\Checks;
+use App\Telegram\DeliveryChannel;
 use App\Telegram\Keyboards;
 use App\Telegram\UpdateHandler;
 use Carbon\CarbonImmutable;
@@ -282,7 +284,7 @@ class AddressTest extends TestCase
         $this->planned('10-00');
         $this->poll();
         $this->assertStringContainsString('Було: 27 листопада, з 09:00', $this->last());
-        $this->assertSame(Delivery::EXPIRED, Delivery::query()->where('dedupe_key', 'like', 'remind:%')->sole()->status);
+        $this->assertSame(Delivery::EXPIRED, Delivery::query()->where('dedupe_key', 'like', 'address:remind:%')->sole()->status);
         $this->assertSame(4, $this->remind('2026-11-26 10:00'));
         $this->planned('10-00', houses: '99');
         $this->poll();
@@ -503,7 +505,10 @@ class AddressTest extends TestCase
         $this->say('Малиновського 99');
         $address = Address::query()->sole();
         $this->assertSame('вул. Європейська (Малиновського)', $address->street->name);
-        $this->assertFalse($address->house_known);
+        Http::assertNotSent(fn ($r) => str_contains($r->body(), 'getBuildingsForStreet'));
+        $this->assertNull($address->house_known);
+        app(HouseDirectory::class)->checkDue();
+        $this->assertFalse($address->refresh()->house_known);
         $this->assertStringContainsString('немає у списку обленерго', $this->say(Keyboards::ADDRESS));
 
         $this->press('a+');
@@ -562,5 +567,30 @@ class AddressTest extends TestCase
         $this->assertStringContainsString('вул. Стара', $this->last());
         $this->assertSame(1, City::query()->sole()->failures);
         $this->assertContains('city:zaporizhzhia', array_column(app(Checks::class)->run(), 'key'));
+    }
+
+    public function test_schedules_and_addresses_are_sent_separately(): void
+    {
+        foreach (['schedule:1', 'remind:1', 'admin:1', 'address:new:1:1', 'address:remind:reminded_at:1:1'] as $key) {
+            Delivery::query()->create(['telegram_id' => 5, 'dedupe_key' => $key, 'text' => $key, 'available_at' => now()]);
+        }
+        $keys = fn (DeliveryChannel $channel) => $channel->pending()->pluck('text')->sort()->values()->all();
+        $this->assertSame(['schedule:1'], $keys(DeliveryChannel::Broadcast));
+        $this->assertSame(['admin:1', 'remind:1'], $keys(DeliveryChannel::Urgent));
+        $this->assertSame(['address:new:1:1', 'address:remind:reminded_at:1:1'], $keys(DeliveryChannel::Address));
+    }
+
+    public function test_schedule_processes_do_not_touch_addresses(): void
+    {
+        $this->follow('пр. Соборний', '24');
+        $this->emergency();
+        $this->travel(1)->minutes();
+        $this->artisan('app:worker', ['--once' => true])->assertSuccessful();
+        $this->artisan('app:reminders', ['--once' => true])->assertSuccessful();
+        Http::assertNotSent(fn ($r) => str_ends_with($r->url(), 'sendDocument'));
+        $this->assertSame(0, CityEvent::query()->count());
+
+        $this->artisan('app:addresses', ['--once' => true])->assertSuccessful();
+        $this->assertSame(Delivery::SENT, Delivery::query()->where('dedupe_key', 'like', 'address:%')->sole()->status);
     }
 }

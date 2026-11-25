@@ -316,6 +316,8 @@ final class ChannelFeed implements OutageFeed
     private function rows(ChannelPost $post): array
     {
         $this->downloads++;
+        // A long run is not a hang.
+        $this->status->beat();
         $path = $this->postFile->download($this->channel, $post->message_id, (string) $post->file, (int) config('addresses.files.max_size'));
 
         try {

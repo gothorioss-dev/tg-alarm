@@ -53,7 +53,7 @@ class MonitorTest extends TestCase
 
     private function alive(array $bot = []): void
     {
-        foreach (['worker', 'reminders', 'bot'] as $service) {
+        foreach (['worker', 'reminders', 'addresses', 'bot'] as $service) {
             app(StatusFiles::class)->write($service, ['beat' => now()->getTimestamp(), ...($service === 'bot' ? $bot : [])]);
         }
     }
@@ -96,7 +96,7 @@ class MonitorTest extends TestCase
         $this->assertSame([], $this->keys($checks));
         $this->travel(120)->seconds();
         app(StatusFiles::class)->write('bot', ['beat' => now()->getTimestamp(), 'starts' => [now()->getTimestamp() - 700, now()->getTimestamp() - 60, now()->getTimestamp() - 30, now()->getTimestamp()]]);
-        $this->assertSame(['hang:worker', 'hang:reminders', 'starts:bot'], $this->keys($checks));
+        $this->assertSame(['hang:worker', 'hang:reminders', 'hang:addresses', 'starts:bot'], $this->keys($checks));
     }
 
     public function test_bot_notices_a_silent_monitor(): void

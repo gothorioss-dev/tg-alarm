@@ -159,13 +159,13 @@ final class Outbox
     {
         $event = $items[0][1];
 
-        $this->push($chat->telegram_id, "remind:address:{$type}:{$event->id}:{$event->revision}", $this->messages->addressReminder($items, $now), $event->starts_at);
+        $this->push($chat->telegram_id, "address:remind:{$type}:{$event->id}:{$event->revision}", $this->messages->addressReminder($items, $now), $event->starts_at);
     }
 
     /** Reminders with an outdated time that have not been sent yet. */
     public function forgetAddressReminders(int $eventId, int $revision): void
     {
-        Delivery::query()->whereIn('dedupe_key', ["remind:address:reminded_day_at:{$eventId}:{$revision}", "remind:address:reminded_at:{$eventId}:{$revision}"])
+        Delivery::query()->whereIn('dedupe_key', ["address:remind:reminded_day_at:{$eventId}:{$revision}", "address:remind:reminded_at:{$eventId}:{$revision}"])
             ->where('status', Delivery::PENDING)->update(['status' => Delivery::EXPIRED]);
     }
 }

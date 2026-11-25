@@ -16,7 +16,7 @@ return [
     // "screen" for buttons that show something, "choice" for those that switch a setting.
     'repeat_pause' => ['screen' => 3, 'choice' => 2],
     // Telegram allows about 30 messages per second in total; the rest is left for replies.
-    'send' => ['parallel' => 5, 'rates' => ['broadcast' => 15, 'urgent' => 7]],
+    'send' => ['parallel' => 5, 'rates' => ['broadcast' => 15, 'urgent' => 7, 'address' => 5]],
     // A reply delayed by a Telegram limit is dropped after this many seconds.
     'reply_expires' => 30,
     // Queues one user can select.
