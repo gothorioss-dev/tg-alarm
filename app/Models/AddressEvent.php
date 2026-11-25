@@ -10,11 +10,11 @@ class AddressEvent extends Model
 {
     protected $guarded = [];
 
-    protected $attributes = ['revision' => 1, 'missing' => 0];
+    protected $attributes = ['revision' => 1, 'announced' => false];
 
     protected $casts = [
         'revision' => 'integer',
-        'missing' => 'integer',
+        'announced' => 'boolean',
         'starts_at' => 'immutable_datetime',
         'ends_at' => 'immutable_datetime',
         'timed_at' => 'immutable_datetime',
@@ -27,5 +27,11 @@ class AddressEvent extends Model
     public function address(): BelongsTo
     {
         return $this->belongsTo(Address::class);
+    }
+
+    /** @return BelongsTo<CityEvent, $this> */
+    public function cityEvent(): BelongsTo
+    {
+        return $this->belongsTo(CityEvent::class);
     }
 }

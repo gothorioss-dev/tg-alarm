@@ -6,22 +6,23 @@ use App\Ingest\Outbox;
 use App\Models\Address;
 use App\Models\AddressEvent;
 use App\Models\Chat;
+use App\Telegram\Access;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
 
 /** Queues reminders about outages known in advance: a day before and as set by the user. */
 final class AddressReminders
 {
-    public function __construct(private Outbox $outbox) {}
+    public function __construct(private Outbox $outbox, private Access $access) {}
 
     public function queueDue(): void
     {
         $now = CarbonImmutable::now();
         $day = (int) config('addresses.remind_day_minutes');
-        $events = AddressEvent::query()->whereNull('ended_at')->where('missing', 0)
+        $events = AddressEvent::query()->whereNull('ended_at')
             ->where('starts_at', '>', $now)->where('starts_at', '<=', $now->addMinutes($day))
             ->where(fn ($query) => $query->whereNull('reminded_day_at')->orWhereNull('reminded_at'))
-            ->whereHas('address.chat', fn ($query) => $query->where('active', true)->whereNotNull('remind_minutes'))
+            ->whereHas('address.chat', fn ($query) => $this->access->withAddresses($query->where('active', true)->whereNotNull('remind_minutes')))
             ->with(['address.chat', 'address.street', 'address.city'])->orderBy('id')->get();
         $due = [];
 

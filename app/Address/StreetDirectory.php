@@ -4,15 +4,9 @@ namespace App\Address;
 
 use App\Sources\SourceException;
 
-interface CitySource
+/** Names of streets and houses; says nothing about outages. */
+interface StreetDirectory
 {
-    /**
-     * @return list<OutageRow> all current and planned outages
-     *
-     * @throws SourceException
-     */
-    public function outages(): array;
-
     /**
      * @return list<string>
      *

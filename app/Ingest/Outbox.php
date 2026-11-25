@@ -148,7 +148,7 @@ final class Outbox
         $addresses = array_map(fn (array $item) => $item[0]->id, $items);
         // "Over" must not be read as "the light is on" while another outage goes on.
         $others = $change === Change::Ended && AddressEvent::query()->whereIn('address_id', $addresses)->whereNull('ended_at')
-            ->where('starts_at', '<=', now())->where(fn ($query) => $query->whereNull('ends_at')->orWhere('ends_at', '>', now()))->exists();
+            ->where('announced', false)->where('starts_at', '<=', now())->where(fn ($query) => $query->whereNull('ends_at')->orWhere('ends_at', '>', now()))->exists();
         $end = $event->ends_at !== null && $event->ends_at->isFuture() ? $event->ends_at : CarbonImmutable::now()->addHours(6);
 
         $this->push($chat->telegram_id, "address:{$change->value}:{$event->id}:{$event->revision}", $this->messages->addressChange($change, $items, $old, $others), $end);

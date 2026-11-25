@@ -11,7 +11,7 @@ class Street extends Model
 
     protected $guarded = [];
 
-    protected $casts = ['active' => 'boolean', 'houses' => 'array', 'houses_at' => 'immutable_datetime'];
+    protected $casts = ['active' => 'boolean', 'listed' => 'boolean', 'houses' => 'array', 'houses_at' => 'immutable_datetime'];
 
     /** @return BelongsTo<City, $this> */
     public function city(): BelongsTo

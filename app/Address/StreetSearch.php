@@ -44,6 +44,45 @@ final class StreetSearch
         return [$sameType ?: $found, $exact];
     }
 
+    /** The only listed street of the same type with the same name, former name or order of words. */
+    public function same(City $city, string $name): ?Street
+    {
+        [, $type] = $this->name($name);
+        $wanted = array_map($this->sorted(...), $this->aliases($name));
+        $whole = $this->sorted($this->name($name)[0]);
+        $found = ['whole' => [], 'alias' => []];
+
+        foreach (Street::query()->where('city_id', $city->id)->where('active', true)->where('listed', true)->get(['id', 'city_id', 'name', 'key', 'listed']) as $street) {
+            if ($this->name($street->name)[1] !== $type) {
+                continue;
+            }
+
+            $aliases = array_map($this->sorted(...), $this->aliases($street->name));
+
+            if (in_array($whole, $aliases, true)) {
+                $found['whole'][] = $street;
+            } elseif (array_intersect($wanted, $aliases) !== []) {
+                $found['alias'][] = $street;
+            }
+        }
+
+        foreach ($found as $streets) {
+            if ($streets !== []) {
+                return count($streets) === 1 ? $streets[0] : null;
+            }
+        }
+
+        return null;
+    }
+
+    private function sorted(string $text): string
+    {
+        $words = explode(' ', $text);
+        sort($words);
+
+        return implode(' ', $words);
+    }
+
     private function score(string $name, string $wanted): ?int
     {
         $best = null;

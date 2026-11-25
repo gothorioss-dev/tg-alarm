@@ -3,73 +3,27 @@
 namespace App\Address;
 
 use App\Sources\SourceException;
-use Carbon\CarbonImmutable;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 
 /** Calls the public functions of a Google Apps Script page, as the page itself does. */
-final class GoogleScriptSource implements CitySource
+final class GoogleScriptDirectory implements StreetDirectory
 {
-    private const OUTAGES_TIMEOUT = 20;
+    private const STREETS_TIMEOUT = 20;
 
     /** The user waits for the houses, and so do other users. */
     private const HOUSES_TIMEOUT = 5;
 
-    public function __construct(private string $url, private string $sheet) {}
-
-    public function outages(): array
-    {
-        $rows = [];
-        $items = $this->call('getOutageData', [$this->sheet], self::OUTAGES_TIMEOUT);
-
-        foreach ($items as $item) {
-            if (is_array($item) && ($row = $this->row($item)) !== null) {
-                $rows[] = $row;
-            }
-        }
-
-        // An empty list looks like a failure of the page and must not end outages.
-        if ($rows === [] || count($rows) < count($items) * 0.9) {
-            throw new SourceException('Outage rows are not recognized: '.count($rows).' of '.count($items));
-        }
-
-        return $rows;
-    }
+    public function __construct(private string $url) {}
 
     public function streets(): array
     {
-        return $this->strings($this->call('getStreetList', [], self::OUTAGES_TIMEOUT));
+        return $this->strings($this->call('getStreetList', [], self::STREETS_TIMEOUT));
     }
 
     public function houses(string $street): array
     {
         return $this->strings($this->call('getBuildingsForStreet', [$street], self::HOUSES_TIMEOUT));
-    }
-
-    /** @param array<string, mixed> $item */
-    private function row(array $item): ?OutageRow
-    {
-        $text = fn (string $key) => is_scalar($item[$key] ?? null) ? trim((string) $item[$key]) : '';
-        $start = $this->time($text('Дата початку'), $text('Час початку') ?: '00:00');
-
-        if ($text('Вулиця') === '' || $start === null || ! array_key_exists('Будинки', $item)) {
-            return null;
-        }
-
-        $end = $this->time($text('Дата закінчення'), $text('Час закінчення'));
-
-        return new OutageRow($text('Вулиця'), $text('Будинки'), $text('Вид робіт'), $start, $end !== null && $end > $start ? $end : null);
-    }
-
-    private function time(string $date, string $time): ?CarbonImmutable
-    {
-        if (! preg_match('/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/', $date, $d) || ! checkdate((int) $d[2], (int) $d[1], (int) $d[3])
-            || ! preg_match('/^(\d{1,2}):(\d{2})(?::\d{2})?$/', $time, $t) || (int) $t[1] > 24 || (int) $t[2] > 59) {
-            return null;
-        }
-
-        return CarbonImmutable::create((int) $d[3], (int) $d[2], (int) $d[1], 0, 0, 0, config('telegram.timezone'))
-            ->setTime((int) $t[1], (int) $t[2])->utc();
     }
 
     /**

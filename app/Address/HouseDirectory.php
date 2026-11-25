@@ -27,7 +27,7 @@ final class HouseDirectory
         }
 
         try {
-            $houses = $this->registry->make($street->city->code)->houses($street->name);
+            $houses = $this->registry->directory($street->city->code)->houses($street->name);
             $street->update(['houses' => $houses, 'houses_at' => now()]);
 
             return $houses;

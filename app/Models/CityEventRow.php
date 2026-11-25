@@ -4,8 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 
-/** A row of the last response of a city source. */
-class CityOutage extends Model
+class CityEventRow extends Model
 {
     public $timestamps = false;
 

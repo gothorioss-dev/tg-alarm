@@ -5,12 +5,12 @@ namespace Tests\Feature;
 use App\Address\AddressReminders;
 use App\Address\AddressText;
 use App\Address\CityPoller;
-use App\Address\CityRegistry;
 use App\Models\Address;
 use App\Models\AddressEvent;
+use App\Models\ChannelPost;
 use App\Models\Chat;
 use App\Models\City;
-use App\Models\CityOutage;
+use App\Models\CityEvent;
 use App\Models\Delivery;
 use App\Models\Street;
 use App\Monitor\Checks;
@@ -20,15 +20,29 @@ use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
+use ZipArchive;
 
 class AddressTest extends TestCase
 {
     use RefreshDatabase;
 
-    private const STREETS = ['пр. Соборний', 'вул. Європейська (Малиновського)', 'вул. Лісова', 'пров. Лісова', 'вул. 8 Березня', 'вул. Рiздвяна (9 січня)'];
+    private const STREETS = ['пр. Соборний', 'вул. Європейська (Малиновського)', 'вул. Лісова', 'пров. Лісова', 'вул. 8 Березня', 'вул. Петра Болбочана (Інтернаціональна)'];
 
-    /** @var list<array<string, string>> */
-    private array $rows = [];
+    private const ACTUAL = 'У зв’язку з проведенням термінових ремонтних робіт сьогодні о 12-00 знеструмлено низку споживачів у м. Запоріжжя.';
+
+    private const ANNOUNCED = 'У зв’язку з проведенням планових ремонтних робіт 27 листопада буде знеструмлено низку споживачів у м. Запоріжжя.';
+
+    private const EXTENDED = 'Шановні споживачі! Увага!  Зміна орієнтовного часу відновлення електропостачання. Аварійні роботи продовжено до 17-00  26.11.2026';
+
+    private const PARTIAL = "Шановні споживачі! Увага! Електропостачання відновлено частково. \nАдреси  споживачів, які залишаються знеструмленими вказані в доданому файлі";
+
+    /** @var array<int, array{time: CarbonImmutable, text: string, reply: ?int, file: ?string}> */
+    private array $posts = [];
+
+    /** @var array<int, string> content by post */
+    private array $files = [];
+
+    private bool $downloads = true;
 
     private int $status = 200;
 
@@ -38,34 +52,116 @@ class AddressTest extends TestCase
     {
         parent::setUp();
         $this->travelTo(CarbonImmutable::parse('2026-11-25 12:00', 'Europe/Kyiv'));
-        Http::fake(function ($request) {
-            if (! str_contains($request->url(), 'script.google.com')) {
-                return Http::response(['ok' => true, 'result' => ['message_id' => 60]]);
-            }
-            $result = match (json_decode($request['request'])[0]) {
-                'getOutageData' => $this->rows,
-                'getStreetList' => self::STREETS,
-                default => ['150', '152а', '10-20'],
-            };
-
-            return Http::response(")]}'\n\n".json_encode([['op.exec', [0, json_encode($result)]], ['di', 5]]), $this->status);
-        });
+        Http::fake(fn ($request) => $this->respond($request));
         $this->chat = Chat::query()->create(['telegram_id' => 5, 'type' => 'private', 'active' => true, 'remind_minutes' => 30, 'keyboard_version' => Keyboards::version(5)]);
-        $this->row('вул. Лісова', '1', 'Планова', '30.11.2026 09:00', '30.11.2026 17:00');
+        $this->chat->subscriptions()->create(['queue' => '1.1']);
+        $this->publish('ГПВ');
         $this->poll();
     }
 
-    private function row(string $street, string $houses, string $kind, string $start, string $end = ' '): void
+    private function respond($request)
     {
-        [$startDate, $startTime] = explode(' ', $start);
-        [$endDate, $endTime] = explode(' ', $end);
-        $this->rows[] = ['Будинки' => $houses, 'Вид робіт' => $kind, 'Вулиця' => $street, 'Дата початку' => $startDate, 'Час початку' => $startTime, 'Дата закінчення' => $endDate, 'Час закінчення' => $endTime];
+        $url = $request->url();
+
+        if (str_contains($url, 'script.google.com')) {
+            $result = json_decode($request['request'])[0] === 'getStreetList' ? self::STREETS : ['150', '152а', '10-20'];
+
+            return Http::response(")]}'\n\n".json_encode([['op.exec', [0, json_encode($result)]], ['di', 5]]));
+        }
+        if (str_contains($url, '/s/zoe_alarm')) {
+            parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+
+            return Http::response($this->page($query['before'] ?? null), $this->status);
+        }
+        if (str_ends_with($url, 'sendDocument')) {
+            $id = (int) basename($request['document']);
+
+            return $this->downloads
+                ? Http::response(['ok' => true, 'result' => ['message_id' => 900 + $id, 'document' => ['file_id' => (string) $id, 'file_name' => $this->posts[$id]['file'], 'file_size' => 100]]])
+                : Http::response(['ok' => false, 'error_code' => 400, 'description' => 'wrong type'], 400);
+        }
+        if (str_ends_with($url, 'getFile')) {
+            return Http::response(['ok' => true, 'result' => ['file_path' => "documents/{$request['file_id']}"]]);
+        }
+        if (str_contains($url, '/file/bot')) {
+            return Http::response($this->files[(int) basename($url)]);
+        }
+
+        return Http::response(['ok' => true, 'result' => ['message_id' => 60]]);
     }
 
-    private function poll(): void
+    private function page(?string $before): string
     {
-        $this->travel(2)->minutes();
-        app(CityPoller::class)->pollDue();
+        $ids = array_filter(array_keys($this->posts), fn (int $id) => $before === null || $id < (int) $before);
+        rsort($ids);
+        $html = '';
+
+        foreach (array_slice($ids, 0, 20) as $id) {
+            $post = $this->posts[$id];
+            $html = '<div class="tgme_widget_message" data-post="zoe_alarm/'.$id.'">'
+                .($post['reply'] ? '<a class="tgme_widget_message_reply" href="https://t.me/zoe_alarm/'.$post['reply'].'"><div class="js-message_reply_text">x</div></a>' : '')
+                .($post['file'] ? '<a class="tgme_widget_message_document_wrap"><div class="tgme_widget_message_document_title">'.$post['file'].'</div></a>' : '')
+                .'<div class="js-message_text">'.nl2br(e($post['text'])).'</div>'
+                .'<a class="tgme_widget_message_date"><time datetime="'.$post['time']->toIso8601String().'"></time></a></div>'.$html;
+        }
+
+        return "<html><body>{$html}</body></html>";
+    }
+
+    private function publish(string $text, ?int $reply = null, ?string $file = null, array $rows = []): int
+    {
+        $id = $this->posts === [] ? 100 : max(array_keys($this->posts)) + 1;
+        $this->posts[$id] = ['time' => CarbonImmutable::now(), 'text' => $text, 'reply' => $reply, 'file' => $file];
+        $this->files[$id] = $this->table($rows);
+
+        return $id;
+    }
+
+    /** Rows: street, houses, reason, start date, start time, end date, end time; empty values are as above. */
+    private function table(array $rows): string
+    {
+        $rows = [['', '', 'ЗМЕМ'], ['№ з/п', 'Населений пункт', 'Вулиця', 'Буд', 'Причина', 'Початок перерви електропостачання', '', 'Орієнтовне відновлення електропостачання'],
+            ['', '', '', '', '', 'Дата', 'Час', 'Дата ', 'Час'], ...array_map(fn (array $row) => ['', 'м. Запоріжжя', ...$row], $rows)];
+        $xml = '';
+
+        foreach ($rows as $n => $row) {
+            $xml .= '<row r="'.($n + 1).'">';
+            foreach ($row as $c => $value) {
+                $xml .= $value === '' ? '' : '<c r="'.chr(65 + $c).($n + 1).'" t="inlineStr"><is><t>'.e($value).'</t></is></c>';
+            }
+            $xml .= '</row>';
+        }
+
+        $path = tempnam(sys_get_temp_dir(), 'x');
+        $zip = new ZipArchive;
+        $zip->open($path, ZipArchive::OVERWRITE);
+        $zip->addFromString('xl/worksheets/sheet1.xml', '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>'.$xml.'</sheetData></worksheet>');
+        $zip->close();
+        $content = (string) file_get_contents($path);
+        unlink($path);
+
+        return $content;
+    }
+
+    private function emergency(array $houses = ['22-28'], string $file = 'ЗМЕМ_ПСР_7_25_11_26.xlsx'): int
+    {
+        $rows = array_map(fn (string $list) => ['пр. Соборний', $list, '', '', '', '', ''], $houses);
+        $rows[0] = ['пр. Соборний', $houses[0], 'аварійна', '25.11.26', '11-50', '25.11.26', '21-00'];
+
+        return $this->publish('Через пошкодження електрообладнання сьогодні знеструмлено низку споживачів у м. Запоріжжя', null, $file, $rows);
+    }
+
+    private function planned(string $start = '09-00', string $date = '27.11.26', string $houses = '24', string $text = self::ANNOUNCED): int
+    {
+        return $this->publish($text, null, 'ЗМЕМ_ЦР_1_27_11_26.xlsx', [['пр. Соборний', $houses, 'Планова', $date, $start, $date, '17-00']]);
+    }
+
+    private function poll(int $times = 1): void
+    {
+        for ($i = 0; $i < $times; $i++) {
+            $this->travel(1)->minutes();
+            app(CityPoller::class)->pollDue();
+        }
     }
 
     private function follow(string $street, string $house, ?Chat $chat = null): Address
@@ -79,6 +175,19 @@ class AddressTest extends TestCase
     private function texts(): array
     {
         return Delivery::query()->orderBy('id')->pluck('text')->all();
+    }
+
+    private function last(): string
+    {
+        return (string) Delivery::query()->latest('id')->value('text');
+    }
+
+    private function remind(string $time): int
+    {
+        $this->travelTo(CarbonImmutable::parse($time, 'Europe/Kyiv'));
+        app(AddressReminders::class)->queueDue();
+
+        return count($this->texts());
     }
 
     private function say(string $text): string
@@ -99,192 +208,283 @@ class AddressTest extends TestCase
         return (string) Http::recorded()->map(fn ($pair) => $pair[0])->filter(fn ($r) => isset($r['text'], $r['chat_id']))->last()?->data()['text'];
     }
 
-    public function test_emergency_is_reported_updated_and_ended(): void
+    public function test_emergency_is_reported_extended_and_restored_by_a_chain_of_replies(): void
     {
         $this->follow('пр. Соборний', '24');
-        $this->row('пр. Соборний', '22-28', 'Аварійне відключення', '25.11.2026 11:50');
+        $id = $this->emergency();
         $this->poll();
-        $this->assertCount(1, $this->texts());
-        $this->assertStringContainsString('Аварійне відключення', $this->texts()[0]);
-        $this->assertStringContainsString('з 11:50, час відновлення невідомий', $this->texts()[0]);
+        $this->assertStringContainsString('Аварійне відключення', $this->last());
+        $this->assertStringContainsString('з 11:50, орієнтовно до 21:00', $this->last());
+        $this->assertSame(1, CityEvent::query()->sole()->rows()->count());
+        // The file came through the admin chat, which is left clean.
+        Http::assertSent(fn ($r) => str_ends_with($r->url(), 'sendDocument') && $r['chat_id'] === 999 && $r['disable_notification']);
+        Http::assertSent(fn ($r) => str_ends_with($r->url(), 'deleteMessage') && $r['message_id'] === 900 + $id);
 
-        $this->rows = array_reverse($this->rows);
+        $reply = $this->publish(self::EXTENDED, $id);
         $this->poll();
-        $this->assertCount(1, $this->texts());
+        $this->assertStringContainsString('Змінено час', $this->last());
+        $this->assertStringContainsString('до 17:00 (26 листопада)', $this->last());
 
-        $this->rows[0]['Дата закінчення'] = '25.11.2026';
-        $this->rows[0]['Час закінчення'] = '18:00';
+        $this->publish('Електропостачання відновлено.', $reply);
         $this->poll();
-        $this->assertStringContainsString('Змінено час', $this->texts()[1]);
-        $this->assertStringContainsString('до 18:00', $this->texts()[1]);
-
-        array_shift($this->rows);
-        $this->poll();
-        $this->assertCount(2, $this->texts());
-        $this->poll();
-        $this->assertStringContainsString('Завершено', $this->texts()[2]);
-        $this->poll();
+        $this->assertStringContainsString('Завершено', $this->last());
+        $this->assertNotNull(CityEvent::query()->sole()->closed_at);
+        $this->poll(3);
         $this->assertCount(3, $this->texts());
+    }
 
-        // The same outage has returned.
-        $this->row('пр. Соборний', '24', 'Аварійне відключення', '25.11.2026 11:50');
+    public function test_partial_restoration_is_told_to_each_house(): void
+    {
+        $this->follow('пр. Соборний', '24');
+        $other = Chat::query()->create(['telegram_id' => 6, 'type' => 'private']);
+        $other->subscriptions()->create(['queue' => '1.1']);
+        $this->follow('пр. Соборний', '25', $other);
+        $id = $this->emergency(['22-28', '25']);
         $this->poll();
+        $this->assertCount(2, $this->texts());
+        $this->publish(self::PARTIAL, $id, 'ЗМЕМ_ПБ_1_.xlsx', [['пр. Соборний', '25', 'аварійна', '25.11.26', '11-50', '26.11.26', '09-00']]);
+        $this->poll();
+        $text = fn (int $chat) => Delivery::query()->where('telegram_id', $chat)->latest('id')->value('text');
+        $this->assertStringContainsString('Завершено', $text(5));
+        $this->assertStringContainsString('Змінено час', $text(6));
         $this->assertCount(4, $this->texts());
-        $this->assertSame(1, AddressEvent::query()->count());
     }
 
-    public function test_one_outage_at_several_addresses_is_one_message(): void
+    public function test_announcement_start_and_reminders(): void
     {
         $this->follow('пр. Соборний', '24');
-        $this->follow('вул. Лісова', '5');
-        $this->row('пр. Соборний', '24', 'Термінова', '26.11.2026 13:00', '26.11.2026 17:00');
-        $this->row('вул. Лісова', '5 (2 пов)', 'Термінова', '26.11.2026 13:00', '26.11.2026 17:00');
+        $this->planned();
         $this->poll();
-        $this->assertCount(1, $this->texts());
-        $this->assertStringContainsString('Соборний, 24', $this->texts()[0]);
-        $this->assertStringContainsString('Лісова, 5 (2 пов)', $this->texts()[0]);
+        $this->assertStringContainsString('🗓 <b>Плановий ремонт', $this->last());
+        $this->assertSame(1, $this->remind('2026-11-26 08:59'));
+        $this->assertSame(2, $this->remind('2026-11-26 09:00'));
+        $this->assertStringContainsString('Через 24 год: Плановий ремонт', $this->last());
+        $this->assertSame(3, $this->remind('2026-11-27 08:30'));
+        $this->assertStringContainsString('Через 30 хв', $this->last());
+        $this->assertSame(3, $this->remind('2026-11-27 09:30'));
+        $this->assertStringContainsString('підтвердження немає', $this->say(Keyboards::ADDRESS));
+
+        $this->travelTo(CarbonImmutable::parse('2026-11-27 10:36', 'Europe/Kyiv'));
+        $this->planned('10-35', text: self::ACTUAL);
+        $this->poll();
+        $this->assertStringContainsString('Почалося: Плановий ремонт', $this->last());
+        $this->assertStringContainsString('з 10:35', $this->last());
+        $this->assertSame(1, CityEvent::query()->count());
+        $this->assertCount(4, $this->texts());
     }
 
-    public function test_short_gap_and_failures_do_not_end_outages(): void
+    public function test_moved_announcement_is_reminded_again_and_a_removed_house_is_cancelled(): void
     {
         $this->follow('пр. Соборний', '24');
-        $this->row('пр. Соборний', '24', 'Аварійне відключення', '25.11.2026 11:50');
+        $this->planned();
         $this->poll();
-        $all = $this->rows;
-
-        $this->rows = [$all[0]];
+        $this->assertSame(2, $this->remind('2026-11-26 09:00'));
+        $this->planned('10-00');
         $this->poll();
-        $this->rows = $all;
-        $this->poll();
-        foreach ([[], [['x' => 1]]] as $broken) {
-            $this->rows = $broken;
-            $this->poll();
-            $this->poll();
-            $this->poll();
-        }
-        $this->status = 500;
-        $this->rows = [$all[0]];
-        $this->poll();
-        $this->poll();
-        $this->assertCount(1, $this->texts());
-        $this->assertSame(8, City::query()->sole()->failures);
-
-        $this->travel(30)->minutes();
-        $this->assertContains('city:zaporizhzhia', array_column(app(Checks::class)->run(), 'key'));
-    }
-
-    public function test_shrunk_response_is_trusted_only_after_repeats(): void
-    {
-        config(['addresses.shrink.polls' => 3]);
-        $this->follow('пр. Соборний', '24');
-        $this->row('пр. Соборний', '24', 'Аварійне відключення', '25.11.2026 11:50');
-        for ($i = 0; $i < 30; $i++) {
-            $this->row('вул. Лісова', (string) $i, 'Планова', '27.11.2026 09:00', '27.11.2026 17:00');
-        }
-        $this->poll();
-        $this->rows = array_slice($this->rows, 0, 1);
-        // New outages are still reported.
-        $this->row('пр. Соборний', '24', 'Планова', '28.11.2026 09:00', '28.11.2026 17:00');
-        $this->poll();
-        $this->assertCount(2, $this->texts());
-        $this->assertContains('city_shrunk:zaporizhzhia', array_column(app(Checks::class)->run(), 'key'));
-        $this->poll();
-        $this->assertCount(2, $this->texts());
-        $this->assertGreaterThan(30, CityOutage::query()->count());
-        $this->poll();
-        $this->poll();
-        $this->assertStringContainsString('Завершено', $this->texts()[2]);
-    }
-
-    public function test_planned_outage_is_reminded_twice_and_again_after_a_move(): void
-    {
-        $this->follow('пр. Соборний', '24');
-        $this->row('пр. Соборний', '24', 'Планова', '27.11.2026 09:00', '27.11.2026 17:00');
-        $this->poll();
-        $remind = function (string $time) {
-            $this->travelTo(CarbonImmutable::parse($time, 'Europe/Kyiv'));
-            app(AddressReminders::class)->queueDue();
-
-            return count($this->texts());
-        };
-        $this->assertSame(1, $remind('2026-11-26 08:59'));
-        $this->assertSame(2, $remind('2026-11-26 09:00'));
-        $this->assertStringContainsString('Через 24 год: Плановий ремонт', $this->texts()[1]);
-        $this->assertSame(2, $remind('2026-11-26 09:30'));
-
-        $this->rows[1]['Час початку'] = '10:00';
-        $this->poll();
-        $this->assertStringContainsString('з 09:00 до 17:00', $this->texts()[2]);
-        $this->assertStringContainsString('з 10:00 до 17:00', $this->texts()[2]);
+        $this->assertStringContainsString('Було: 27 листопада, з 09:00', $this->last());
         $this->assertSame(Delivery::EXPIRED, Delivery::query()->where('dedupe_key', 'like', 'remind:%')->sole()->status);
-        $this->assertSame(4, $remind('2026-11-26 10:00'));
-        $this->assertSame(4, $remind('2026-11-27 09:29'));
-        $this->assertSame(5, $remind('2026-11-27 09:30'));
-        $this->assertStringContainsString('Через 30 хв', $this->texts()[4]);
-        $this->assertSame(5, $remind('2026-11-27 09:45'));
+        $this->assertSame(4, $this->remind('2026-11-26 10:00'));
+        $this->planned('10-00', houses: '99');
+        $this->poll();
+        $this->assertStringContainsString('Скасовано', $this->last());
     }
 
-    public function test_no_reminders_when_off_or_late_and_cancelled_is_not_ended(): void
+    public function test_one_outage_at_several_addresses_is_one_message_and_time_is_carried_down(): void
     {
-        $this->chat->update(['remind_minutes' => null]);
         $this->follow('пр. Соборний', '24');
-        $this->row('пр. Соборний', '24', 'Планова', '26.11.2026 09:00', '26.11.2026 17:00');
+        $this->follow('вул. Петра Болбочана (Інтернаціональна)', '5');
+        // Another order of words in the name.
+        $this->publish(self::ACTUAL, null, 'ЗМЕМ_1.xlsx', [['пр. Соборний', '24', 'Термінова', '25.11.26', '11-58', '25.11.2026', '17:00'], ['вул. Болбочана Петра (Інтернаціональна)', '5 (2 пов)']]);
         $this->poll();
-        $this->travelTo(CarbonImmutable::parse('2026-11-26 08:45', 'Europe/Kyiv'));
-        app(AddressReminders::class)->queueDue();
         $this->assertCount(1, $this->texts());
+        $this->assertStringContainsString('Соборний, 24', $this->last());
+        $this->assertStringContainsString(', 5 (2 пов)', $this->last());
+        $this->assertSame(count(self::STREETS), Street::query()->count());
+    }
 
-        // Published less than a day before: only the second reminder.
-        $this->chat->update(['remind_minutes' => 30]);
-        app(AddressReminders::class)->queueDue();
+    public function test_unknown_street_is_added_and_survives_the_directory(): void
+    {
+        $this->publish(self::ACTUAL, null, 'ЗМЕМ_1.xlsx', [['о. Хортиця', '52', 'Термінова', '25.11.26', '11-58', '25.11.26', '17-00']]);
+        $this->poll();
+        $this->assertFalse(Street::query()->where('key', 'о. хортиця')->sole()->listed);
+        $this->travel(1)->days();
+        $this->poll();
+        $this->assertTrue(Street::query()->where('key', 'о. хортиця')->sole()->active);
+    }
+
+    public function test_numbers_stored_by_excel_are_read(): void
+    {
+        $this->follow('пр. Соборний', '24');
+        $this->publish(self::ACTUAL, null, 'ЗМЕМ_1.xlsx', [['пр. Соборний', '24', 'Термінова', '46351', '0.5', '46351', '0.70833333333333337']]);
+        $this->poll();
+        $this->assertStringContainsString('25 листопада, з 12:00, орієнтовно до 17:00', $this->last());
+    }
+
+    public function test_other_files_and_posts_are_ignored(): void
+    {
+        $id = $this->publish('x', null, 'Перерви_ЗапРЕМ_1.xlsx', []);
+        $this->publish('Електропостачання відновлено', $id);
+        $this->publish('просто текст');
+        $this->poll();
+        $this->assertSame(0, CityEvent::query()->count());
+        Http::assertNotSent(fn ($r) => str_ends_with($r->url(), 'sendDocument'));
+    }
+
+    public function test_failed_file_is_retried_then_reported_and_its_reply_waits(): void
+    {
+        $this->follow('пр. Соборний', '24');
+        $this->downloads = false;
+        $id = $this->emergency();
+        $reply = $this->publish(self::EXTENDED, $id);
+        $this->poll(3);
+        $this->assertCount(0, $this->texts());
+        $this->downloads = true;
+        $this->poll(6);
         $this->assertCount(2, $this->texts());
-        array_pop($this->rows);
-        $this->poll();
-        $this->poll();
-        $this->assertStringContainsString('Скасовано', $this->texts()[2]);
+        $this->assertSame(ChannelPost::DONE, ChannelPost::query()->where('message_id', $reply)->sole()->status);
+
+        $this->downloads = false;
+        $this->emergency(file: 'ЗМЕМ_2.xlsx');
+        $this->poll(70);
+        $this->assertStringContainsString('людей за ним не сповіщено', $this->last());
+        $this->assertSame(999, Delivery::query()->latest('id')->value('telegram_id'));
     }
 
-    public function test_planned_works_long_over_leave_the_list_silently(): void
+    public function test_broken_table_does_not_hold_up_others(): void
     {
         $this->follow('пр. Соборний', '24');
-        $this->row('пр. Соборний', '24', 'Планова', '25.11.2026 13:00', '25.11.2026 17:00');
-        $this->poll();
-        $this->travelTo(CarbonImmutable::parse('2026-11-26 00:10', 'Europe/Kyiv'));
-        array_pop($this->rows);
-        $this->poll();
+        $broken = $this->emergency(file: 'ЗМЕМ_2.xlsx');
+        $this->files[$broken] = 'not a table';
+        $this->emergency();
         $this->poll();
         $this->assertCount(1, $this->texts());
-        $this->assertNotNull(AddressEvent::query()->sole()->ended_at);
     }
 
-    public function test_end_of_one_outage_mentions_another(): void
+    public function test_edited_file_updates_the_outage(): void
     {
         $this->follow('пр. Соборний', '24');
-        $this->row('пр. Соборний', '24', 'Аварійне відключення', '25.11.2026 11:50');
-        $this->row('пр. Соборний', '24', 'Термінова', '25.11.2026 10:00', '25.11.2026 17:00');
+        $id = $this->emergency();
         $this->poll();
-        unset($this->rows[1]);
-        $this->rows = array_values($this->rows);
+        $this->files[$id] = $this->table([['пр. Соборний', '24', 'аварійна', '25.11.26', '11-50', '25.11.26', '22-00']]);
+        $this->posts[$id]['text'] .= ' (уточнено)';
         $this->poll();
-        $this->poll();
-        $this->assertStringContainsString('діє інше відключення', $this->texts()[2]);
+        $this->assertStringContainsString('до 22:00', $this->last());
+        $this->assertCount(2, $this->texts());
     }
 
-    public function test_inactive_chat_gets_nothing(): void
+    public function test_unknown_reply_is_reported_to_the_admin_only(): void
     {
-        $this->chat->update(['active' => false]);
         $this->follow('пр. Соборний', '24');
-        $this->row('пр. Соборний', '24', 'Аварійне відключення', '25.11.2026 11:50');
+        $id = $this->emergency();
+        $this->poll();
+        $this->publish('Електропостачання не відновлено', $id);
+        $this->poll();
+        $this->assertStringContainsString('Незрозуміла відповідь', $this->last());
+        $this->assertSame(999, Delivery::query()->latest('id')->value('telegram_id'));
+        $this->assertNull(CityEvent::query()->sole()->closed_at);
+    }
+
+    public function test_history_is_silent_and_closed_outages_are_not_downloaded(): void
+    {
+        ChannelPost::query()->delete();
+        $this->follow('пр. Соборний', '24');
+        // The announcement, the actual start and the restoration.
+        $this->planned('13-00', '25.11.26');
+        $actual = $this->planned('13-30', '25.11.26', text: self::ACTUAL);
+        $this->publish('Електропостачання відновлено', $actual);
+        $this->emergency();
         $this->poll();
         $this->assertCount(0, $this->texts());
+        $this->assertSame(1, CityEvent::query()->whereNull('closed_at')->count());
+        $this->assertStringContainsString('з 11:50', $this->say(Keyboards::ADDRESS));
+        Http::assertNotSent(fn ($r) => str_ends_with($r->url(), 'sendDocument') && basename($r['document']) === (string) $actual);
     }
 
-    public function test_address_is_added_without_a_queue_and_shows_current_outages(): void
+    public function test_reply_to_an_old_post_reads_it(): void
     {
-        $this->row('пр. Соборний', '150', 'Аварійне відключення', '25.11.2026 11:50');
+        $this->follow('пр. Соборний', '24');
+        $this->posts[40] = ['time' => CarbonImmutable::parse('2026-11-10 12:00'), 'text' => 'Через пошкодження', 'reply' => null, 'file' => 'ЗМЕМ_старий.xlsx'];
+        $this->files[40] = $this->table([['пр. Соборний', '24', 'аварійна', '10.11.26', '11-50', '10.11.26', '21-00']]);
+        for ($i = 0; $i < 25; $i++) {
+            $this->publish('x');
+        }
+        $this->publish(self::EXTENDED, 40);
         $this->poll();
-        $this->assertStringContainsString('Черга для цього не потрібна', $this->say(Keyboards::ADDRESS));
-        $this->press('a+');
+        $this->assertStringContainsString('до 17:00 (26 листопада)', $this->last());
+    }
+
+    public function test_end_of_one_outage_mentions_another_and_old_ones_are_forgotten(): void
+    {
+        $this->follow('пр. Соборний', '24');
+        $id = $this->emergency();
+        $this->emergency(file: 'ЗМЕМ_2.xlsx');
+        $this->poll();
+        $this->publish('Електропостачання відновлено', $id);
+        $this->poll();
+        $this->assertStringContainsString('діє інше відключення', $this->last());
+        $count = count($this->texts());
+        $this->travel(4)->days();
+        $this->poll();
+        $this->assertSame(0, CityEvent::query()->whereNull('closed_at')->count());
+        $this->assertSame(0, AddressEvent::query()->whereNull('ended_at')->count());
+        $this->assertCount($count, $this->texts());
+    }
+
+    public function test_late_news_about_a_beginning_is_not_sent(): void
+    {
+        $this->follow('пр. Соборний', '24');
+        $id = $this->emergency();
+        $this->travel(4)->hours();
+        $this->poll();
+        $this->assertCount(0, $this->texts());
+        $this->publish('Електропостачання відновлено', $id);
+        $this->poll();
+        $this->assertStringContainsString('Завершено', $this->last());
+    }
+
+    public function test_nothing_is_sent_without_a_queue_or_to_those_who_left(): void
+    {
+        $this->follow('пр. Соборний', '24');
+        $this->planned();
+        $this->poll();
+        $this->chat->subscriptions()->delete();
+        $this->assertSame(1, $this->remind('2026-11-26 09:00'));
+        $id = $this->emergency();
+        $this->poll();
+        $this->assertCount(1, $this->texts());
+
+        $this->chat->subscriptions()->create(['queue' => '1.1']);
+        $this->assertStringContainsString('з 11:50', $this->say(Keyboards::ADDRESS));
+        $this->chat->update(['active' => false]);
+        $this->publish('Електропостачання відновлено', $id);
+        $this->poll();
+        $this->assertCount(1, $this->texts());
+    }
+
+    public function test_without_a_queue_only_the_selection_and_the_guide_are_available(): void
+    {
+        $this->chat->subscriptions()->delete();
+        foreach ([Keyboards::SCHEDULE, Keyboards::SETTINGS, Keyboards::ADDRESS, Keyboards::INVITE, 'привіт'] as $text) {
+            $this->assertStringContainsString('Оберіть чергу', $this->say($text), $text);
+        }
+        $this->assertStringContainsString('Довідник', $this->say(Keyboards::GUIDE));
+        foreach (['mute', 'r:10', 'a+', 'address'] as $data) {
+            $this->assertStringContainsString('Оберіть чергу', $this->press($data), $data);
+        }
+        $this->assertFalse($this->chat->refresh()->silent);
+        $this->assertNull($this->chat->address_draft);
+        Http::assertSent(fn ($r) => str_contains($r['text'] ?? '', 'Спочатку оберіть') && ($r['show_alert'] ?? false));
+        $this->press('q+:1.1');
+        $this->press('mute');
+        $this->assertTrue($this->chat->refresh()->silent);
+    }
+
+    public function test_address_is_added_with_a_notice_and_shows_current_outages(): void
+    {
+        $this->emergency(['150']);
+        $this->poll();
+        $this->assertStringContainsString('Експериментальна функція', $this->say(Keyboards::ADDRESS));
+        $this->assertStringContainsString('Експериментальна функція', $this->press('a+'));
         $text = $this->say('Запоріжжя, Соборный 150');
         $this->assertStringContainsString('пр. Соборний, 150', $text);
         $this->assertStringContainsString('з 11:50', $text);
@@ -292,7 +492,6 @@ class AddressTest extends TestCase
         $this->poll();
         $this->assertCount(0, $this->texts());
         $this->assertNull($this->chat->refresh()->address_draft);
-        $this->assertStringContainsString('Моя адреса', $this->say('привіт'));
 
         $this->press('a-:'.Address::query()->sole()->id);
         $this->assertSame(0, AddressEvent::query()->count());
@@ -340,8 +539,7 @@ class AddressTest extends TestCase
 
     public function test_foreign_address_is_not_removed(): void
     {
-        $other = Chat::query()->create(['telegram_id' => 6, 'type' => 'private']);
-        $address = $this->follow('пр. Соборний', '24', $other);
+        $address = $this->follow('пр. Соборний', '24', Chat::query()->create(['telegram_id' => 6, 'type' => 'private']));
         $this->press("a-:{$address->id}");
         $this->assertModelExists($address);
     }
@@ -349,19 +547,20 @@ class AddressTest extends TestCase
     public function test_second_city_is_asked_for(): void
     {
         config(['addresses.cities.other' => ['name' => 'Інше', ...array_diff_key(config('addresses.cities.zaporizhzhia'), ['name' => 1])]]);
-        app(CityRegistry::class)->cities();
         $this->assertStringContainsString('Оберіть місто', $this->press('a+'));
         $this->assertStringContainsString('вулицю та будинок', $this->press('a+:zaporizhzhia'));
         $this->assertStringContainsString('Запоріжжя, пр. Соборний, 150', $this->say('Соборний 150'));
     }
 
-    public function test_streets_that_disappear_are_reported_if_used(): void
+    public function test_unavailable_channel_and_lost_streets_are_reported(): void
     {
         Street::query()->create(['city_id' => City::query()->sole()->id, 'name' => 'вул. Стара', 'key' => 'вул. стара', 'active' => true]);
         $this->follow('вул. Стара', '1');
         $this->travel(1)->days();
+        $this->status = 500;
         $this->poll();
-        $this->assertFalse(Street::query()->where('key', 'вул. стара')->sole()->active);
-        $this->assertStringContainsString('вул. Стара', $this->texts()[0]);
+        $this->assertStringContainsString('вул. Стара', $this->last());
+        $this->assertSame(1, City::query()->sole()->failures);
+        $this->assertContains('city:zaporizhzhia', array_column(app(Checks::class)->run(), 'key'));
     }
 }

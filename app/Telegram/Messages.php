@@ -4,6 +4,7 @@ namespace App\Telegram;
 
 use App\Address\Change;
 use App\Address\CityRegistry;
+use App\Address\Kind;
 use App\Models\Address;
 use App\Models\AddressEvent;
 use App\Models\City;
@@ -130,7 +131,7 @@ final class Messages
             ."<b>Кнопки внизу</b>\n"
             ."📅 <b>Графік</b> — відключення на сьогодні та завтра\n"
             ."⚡ <b>Мої черги</b> — додати або прибрати чергу\n"
-            ."🏠 <b>Моя адреса</b> — аварійні та ремонтні відключення за адресою ({$this->cityNames()})\n"
+            ."🚨 <b>Відключення за адресою</b> — сповіщення про аварії та ремонти за вашою адресою ({$this->cityNames()})\n"
             ."🔔 <b>Сповіщення</b> — звук і нагадування перед відключенням\n"
             ."📖 <b>Довідник</b> — ця підказка\n"
             ."👥 <b>Запросити</b> — надіслати бота рідним або сусідам\n\n"
@@ -346,10 +347,11 @@ final class Messages
     /** @param list<Address> $addresses with active events */
     public function addresses(array $addresses): string
     {
-        $text = "🏠 <b>Моя адреса</b>\n\n";
+        $text = "🚨 <b>Відключення за адресою</b>\nСповіщення про аварійні та ремонтні відключення\n\n";
 
         if ($addresses === []) {
-            return $text."Додайте адресу — і я повідомлю про аварійні, термінові та планові відключення саме за нею. Черга для цього не потрібна.\n\n"
+            return $text."Додайте адресу — і я повідомлю про аварію, терміновий або плановий ремонт саме за нею. На графік за чергою це не впливає.\n\n"
+                .$this->experimental()."\n\n"
                 ."Поки що доступно: {$this->cityNames()}. Можна додати до ".config('addresses.max_addresses').' адрес.';
         }
 
@@ -371,7 +373,7 @@ final class Messages
 
     public function addressDraft(string $step, ?string $problem, ?Street $street): string
     {
-        $title = "🏠 <b>Нова адреса</b>\n\n";
+        $title = "🚨 <b>Нова адреса</b>\n\n".$this->experimental()."\n\n";
         $hint = match ($problem) {
             'unknown' => "Такої вулиці не знайдено. Перевірте назву й спробуйте ще раз.\n\n",
             'many' => "Знайдено забагато вулиць. Напишіть назву повніше.\n\n",
@@ -413,6 +415,7 @@ final class Messages
         $kind = $this->addressKind($event->kind);
         $title = match ($change) {
             Change::Appeared => ($event->starts_at->isFuture() ? '🗓' : '🚨')." <b>{$kind}</b>",
+            Change::Started => "🚨 <b>Почалося: {$kind}</b>",
             Change::Changed => "🔄 <b>Змінено час: {$kind}</b>",
             Change::Cancelled => "✅ <b>Скасовано: {$kind}</b>",
             Change::Ended => "✅ <b>Завершено: {$kind}</b>",
@@ -423,8 +426,8 @@ final class Messages
             default => $this->addressTime($event->starts_at, $event->ends_at),
         };
         $note = match ($change) {
-            Change::Ended => "\n\nЗа даними обленерго відключення більше немає у списку.".($others ? ' Але за цією адресою діє інше відключення.' : ''),
-            Change::Cancelled => "\n\nЗа даними обленерго цього відключення більше немає у списку.",
+            Change::Ended => "\n\nЗа повідомленням обленерго електропостачання відновлено.".($others ? ' Але за цією адресою діє інше відключення.' : ''),
+            Change::Cancelled => "\n\nЗа повідомленням обленерго відключення за цією адресою не буде.",
             default => '',
         };
 
@@ -461,18 +464,21 @@ final class Messages
         $isOver = $event->ends_at !== null && $event->ends_at->isPast();
 
         return '• '.$this->addressKind($event->kind).': '.$this->addressTime($event->starts_at, $event->ends_at)
-            .($isOver ? ' (час минув, але запис ще у списку)' : '')
-            .($event->note === null ? '' : ' ('.e($event->note).')');
+            .match (true) {
+                $isOver => ' (час минув, підтвердження відновлення немає)',
+                $event->announced && $event->starts_at->isPast() => ' (мало початися, підтвердження немає)',
+                default => '',
+            }
+        .($event->note === null ? '' : ' ('.e($event->note).')');
     }
 
     private function addressKind(string $kind): string
     {
         return match ($kind) {
-            'Аварійне відключення' => 'Аварійне відключення',
-            'Термінова' => 'Терміновий ремонт',
-            'Планова' => 'Плановий ремонт',
-            '' => 'Відключення',
-            default => e($kind),
+            Kind::Emergency->value => 'Аварійне відключення',
+            Kind::Urgent->value => 'Терміновий ремонт',
+            Kind::Planned->value => 'Плановий ремонт',
+            default => 'Відключення',
         };
     }
 
@@ -483,7 +489,7 @@ final class Messages
 
         return $end === null
             ? $text.', час відновлення невідомий'
-            : $text.' до '.$this->endTime($end->setTimezone(config('telegram.timezone')), $start);
+            : $text.', орієнтовно до '.$this->endTime($end->setTimezone(config('telegram.timezone')), $start);
     }
 
     /** @param non-empty-list<Address> $addresses */
@@ -502,5 +508,16 @@ final class Messages
     private function cityNames(): string
     {
         return e(implode(', ', array_map($this->cities->name(...), $this->cities->codes())));
+    }
+
+    /** Shown while there is no selected queue. Up to 200 characters, no tags. */
+    public function queueFirst(): string
+    {
+        return 'Спочатку оберіть свою чергу — без неї інші функції недоступні.';
+    }
+
+    private function experimental(): string
+    {
+        return '🧪 <b>Експериментальна функція.</b> Дані можуть бути неповними або надходити із запізненням.';
     }
 }

@@ -6,6 +6,7 @@ namespace App\Address;
 enum Change: string
 {
     case Appeared = 'new';
+    case Started = 'started';
     case Changed = 'changed';
     case Cancelled = 'cancelled';
     case Ended = 'ended';

@@ -12,11 +12,18 @@ final class CityRegistry
         return array_keys(array_filter(config('addresses.cities'), fn (array $city) => $city['enabled'] ?? true));
     }
 
-    public function make(string $code): CitySource
+    public function feed(string $code): OutageFeed
     {
-        $city = config("addresses.cities.{$code}");
+        $feed = config("addresses.cities.{$code}.feed");
 
-        return app()->make($city['class'], $city['options'] ?? []);
+        return app()->make($feed['class'], $feed['options'] ?? []);
+    }
+
+    public function directory(string $code): StreetDirectory
+    {
+        $directory = config("addresses.cities.{$code}.directory");
+
+        return app()->make($directory['class'], $directory['options'] ?? []);
     }
 
     public function name(string $code): string

@@ -173,9 +173,6 @@ final class Checks
             if (($city->succeeded_at ?? $city->created_at)->addMinutes($minutes)->isPast()) {
                 $problems[] = new Problem("city:{$city->code}", "Немає даних про відключення за адресами: {$name}", "Останні дані отримано понад {$minutes} хв тому. Джерело недоступне або змінило формат.");
             }
-            if ($city->shrunk > 0) {
-                $problems[] = new Problem("city_shrunk:{$city->code}", "Підозріло короткий список відключень: {$name}", 'Завершення відключень поки не враховуються.');
-            }
         }
 
         return $problems;

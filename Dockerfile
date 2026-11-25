@@ -1,5 +1,8 @@
 FROM php:8.4-cli-alpine AS base
-RUN docker-php-ext-install pcntl
+RUN apk add --no-cache libzip \
+    && apk add --no-cache --virtual .build libzip-dev \
+    && docker-php-ext-install pcntl zip \
+    && apk del .build
 WORKDIR /app
 
 FROM base AS dev

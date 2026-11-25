@@ -98,6 +98,13 @@ final class HouseList
 
             return null;
         }
+        // "30/нов№56": the former and the new number of the same house.
+        if (preg_match('/^(\d+\p{L}?)\/нов\.?\s*№?\s*(\d+\p{L}?)$/u', $text, $match)) {
+            $this->add('house', key: $match[1], note: $note);
+            $this->add('house', key: $match[2], note: "новий номер, раніше {$match[1]}".($note === '' ? '' : ", {$note}"));
+
+            return null;
+        }
         // "21 п.1-4", "43/Тургенєва24": a part of the house or its second name.
         if (preg_match('/^(\d+\p{L}?)(?:\s+|\/)(\p{L}.*)$/u', $text, $match)) {
             $this->add('house', key: $match[1], note: trim($match[2].($note === '' ? '' : ", {$note}")));

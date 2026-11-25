@@ -23,7 +23,7 @@ final class UpdateHandler
     /** @var array<int, array{screen: string, message: ?int, due: int, until: int}> replies delayed by a Telegram limit by chat id, time in seconds */
     private array $delayed = [];
 
-    public function __construct(private TelegramClient $telegram, private Messages $messages, private Statistics $statistics, private RateLimiter $limiter, private PressSeries $series, private ProcessStatus $status, private AddressDialog $addresses, private CityRegistry $cities) {}
+    public function __construct(private TelegramClient $telegram, private Messages $messages, private Statistics $statistics, private RateLimiter $limiter, private PressSeries $series, private ProcessStatus $status, private AddressDialog $addresses, private CityRegistry $cities, private Access $access) {}
 
     /** @param array<string, mixed> $update */
     public function handle(array $update): void
@@ -81,17 +81,13 @@ final class UpdateHandler
         }
         if ($screen = Keyboards::screen($text, $chat->telegram_id)) {
             $this->addresses->cancel($chat);
+            $screen = $this->access->screen($chat, $screen) ? $screen : 'queue';
             $this->present($chat, $screen, pressedId: (int) $message['message_id']);
 
             return;
         }
-        if ($this->addresses->isWaiting($chat)) {
+        if ($this->addresses->isWaiting($chat) && $this->access->addresses($chat)) {
             $this->present($chat, $this->addresses->text($chat, $text) ? 'address' : 'address_draft');
-
-            return;
-        }
-        if (! $chat->subscriptions()->exists() && $chat->addresses()->exists()) {
-            $this->present($chat, 'address');
 
             return;
         }
@@ -122,6 +118,12 @@ final class UpdateHandler
         $data = self::LEGACY[$data] ?? $data;
         [$toast, $alert] = [null, false];
 
+        if (! preg_match('/^(q[+-]?:|(queue|done|help|schedule)$)/', $data) && ! $this->access->screen($chat, 'settings')) {
+            $this->answer($query['id'], $this->messages->queueFirst(), true);
+            $this->present($chat, 'queue', $messageId);
+
+            return;
+        }
         if (! preg_match('/^as:/', $data)) {
             $this->addresses->cancel($chat);
         }

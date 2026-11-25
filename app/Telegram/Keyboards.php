@@ -27,7 +27,7 @@ final class Keyboards
     /** Shown to the admin only. */
     public const STATISTICS = '📊 Статистика';
 
-    public const ADDRESS = '🏠 Моя адреса';
+    public const ADDRESS = '🚨 Відключення за адресою';
 
     /**
      * Main menu. A message carries either this or inline buttons.
@@ -39,9 +39,9 @@ final class Keyboards
         return [
             'keyboard' => [
                 [['text' => self::SCHEDULE], ['text' => self::QUEUES]],
-                [['text' => self::ADDRESS], ['text' => self::SETTINGS]],
-                [['text' => self::GUIDE], ['text' => self::INVITE]],
-                ...(self::isAdmin($telegramId) ? [[['text' => self::STATISTICS]]] : []),
+                [['text' => self::ADDRESS]],
+                [['text' => self::SETTINGS], ['text' => self::GUIDE]],
+                [['text' => self::INVITE], ...(self::isAdmin($telegramId) ? [['text' => self::STATISTICS]] : [])],
             ],
             'resize_keyboard' => true,
         ];

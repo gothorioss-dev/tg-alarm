@@ -88,6 +88,24 @@ class TelegramClient
         return $this->handler ??= Utils::chooseHandler();
     }
 
+    /** Content of a file prepared by getFile. */
+    public function download(string $path): string
+    {
+        $token = (string) config('telegram.token');
+
+        try {
+            $response = Http::setHandler($this->handler())->timeout(20)->connectTimeout(10)->get("https://api.telegram.org/file/bot{$token}/{$path}");
+        } catch (ConnectionException $e) {
+            throw $this->connectionError($e);
+        }
+
+        if ($response->status() !== 200) {
+            throw new TelegramException('File was not received', $response->status());
+        }
+
+        return $response->body();
+    }
+
     private function url(string $method): string
     {
         $token = (string) config('telegram.token');

@@ -5,254 +5,166 @@ namespace App\Address;
 use App\Ingest\Outbox;
 use App\Models\Address;
 use App\Models\AddressEvent;
-use App\Models\City;
-use App\Models\CityOutage;
+use App\Models\CityEvent;
+use App\Models\CityEventRow;
+use App\Telegram\Access;
 use Carbon\CarbonImmutable;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
 
-/** Compares outages of a city with what is known about the addresses of users. */
+/** Brings what users know about outages at their addresses in line with the source. */
 final class AddressTracker
 {
-    private const EMERGENCY = 'Аварійне відключення';
+    /** @var array<string, HouseList> parsed lists */
+    private array $houses = [];
 
-    public function __construct(private Outbox $outbox) {}
+    public function __construct(private Outbox $outbox, private Access $access) {}
 
     /**
-     * @param  list<OutageRow>  $rows
-     * @param  bool  $trusted  whether a missing outage can be taken as ended
+     * Called within a transaction that has already written something.
+     *
+     * @param  bool  $notify  whether users are told
+     * @param  bool  $started  an announced outage has been confirmed
+     * @param  bool  $late  the news about the beginning is too old to be sent
      */
-    public function apply(City $city, array $rows, bool $trusted): void
+    public function apply(CityEvent $event, bool $notify, bool $started = false, bool $late = false): void
     {
-        $byStreet = [];
+        $this->houses = [];
+        $rows = $event->closed_at !== null ? [] : $event->rows()->get()->groupBy('street_id')->all();
 
-        foreach ($rows as $row) {
-            $byStreet[AddressText::normalize($row->street)][] = $row;
-        }
+        Address::query()
+            ->where(fn (Builder $query) => $query->whereIn('street_id', array_keys($rows))
+                ->orWhereHas('events', fn (Builder $events) => $events->where('city_event_id', $event->id)->whereNull('ended_at')))
+            ->with(['chat', 'street', 'city', 'events' => fn ($events) => $events->where('city_event_id', $event->id)])
+            ->orderBy('chat_id')->orderBy('id')->get()->groupBy('chat_id')
+            // All addresses of a user go together, so that one outage is one message.
+            ->each(function ($addresses) use ($event, $rows, $notify, $started, $late) {
+                $messages = [];
 
-        $houses = [];
+                foreach ($addresses as $address) {
+                    $found = $this->search($address->house, $rows[$address->street_id] ?? []);
+                    $result = $this->update($event, $address, $found, $started, $late);
 
-        // All addresses of a user go together, so that one outage is one message.
-        Address::query()->where('city_id', $city->id)->distinct()->orderBy('chat_id')->pluck('chat_id')
-            ->chunk(200)->each(function ($chatIds) use ($city, $byStreet, $trusted, &$houses) {
-                $addresses = Address::query()->where('city_id', $city->id)->whereIn('chat_id', $chatIds)
-                    ->with(['chat', 'street', 'city', 'events'])->orderBy('id')->get();
-
-                foreach ($addresses->groupBy('chat_id') as $group) {
-                    $plans = [];
-
-                    foreach ($group as $address) {
-                        $found = $this->search($address->house, $byStreet[$address->street->key] ?? [], $houses);
-
-                        if ($plan = $this->plan($address, $found, $trusted)) {
-                            $plans[] = [$address, $plan];
-                        }
-                    }
-
-                    if ($plans !== []) {
-                        $this->save($plans);
+                    if ($result !== null) {
+                        [$change, $addressEvent, $old] = $result;
+                        $key = implode('|', [$change->value, $addressEvent->kind, $addressEvent->starts_at, $addressEvent->ends_at, $old['starts_at'] ?? '', $old['ends_at'] ?? '']);
+                        $messages[$key] ??= ['change' => $change, 'old' => $old, 'items' => []];
+                        $messages[$key]['items'][] = [$address, $addressEvent];
                     }
                 }
-            });
 
-        AddressEvent::query()->whereNotNull('ended_at')->where('ended_at', '<', now()->subDays((int) config('addresses.keep_days')))->delete();
+                $chat = $addresses[0]->chat;
+
+                foreach ($notify && $chat->active && $messages !== [] && $this->access->addresses($chat) ? $messages : [] as $message) {
+                    $this->outbox->address($chat, $message['change'], $message['items'], $message['old']);
+                }
+            });
     }
 
     /** Remembers the current outages of a new address, which are shown to the user at once. */
     public function start(Address $address): void
     {
-        $rows = CityOutage::query()->where('city_id', $address->city_id)->where('street_key', $address->street->key)->get()
-            ->map(fn (CityOutage $row) => new OutageRow($address->street->name, $row->houses, $row->kind, $row->starts_at, $row->ends_at))->all();
-        $houses = [];
+        $this->houses = [];
+        $rows = CityEventRow::query()->where('street_id', $address->street_id)
+            ->whereIn('city_event_id', CityEvent::query()->whereNull('closed_at')->select('id'))->get()->groupBy('city_event_id');
+        $events = CityEvent::query()->whereKey($rows->keys())->get()->keyBy('id');
 
-        foreach ($this->search($address->house, $rows, $houses) as $found) {
-            AddressEvent::query()->firstOrCreate(
-                ['address_id' => $address->id, 'kind' => $found->kind, 'starts_at' => $found->startsAt],
-                ['ends_at' => $found->endsAt, 'note' => $found->note ?: null, 'timed_at' => now()],
-            );
-        }
-    }
-
-    /**
-     * @param  array<OutageRow>  $rows
-     * @param  array<string, HouseList>  $houses  parsed lists
-     * @return array<string, Found> by kind and start
-     */
-    private function search(string $house, array $rows, array &$houses): array
-    {
-        $found = [];
-
-        foreach ($rows as $row) {
-            $note = ($houses[$row->houses] ??= new HouseList($row->houses))->match($house);
-
-            if ($note === null) {
-                continue;
+        foreach ($rows as $eventId => $eventRows) {
+            if (($found = $this->search($address->house, $eventRows)) !== null) {
+                AddressEvent::query()->firstOrCreate(['address_id' => $address->id, 'city_event_id' => $eventId], [
+                    'kind' => $found->kind, 'starts_at' => $found->startsAt, 'ends_at' => $found->endsAt, 'note' => $found->note ?: null,
+                    'announced' => $events[$eventId]->announced, 'timed_at' => now(),
+                ]);
             }
-
-            $key = $this->key($row->kind, $row->startsAt);
-            $known = $found[$key] ?? null;
-            $found[$key] = new Found(
-                $row->kind,
-                $row->startsAt,
-                // An unknown end is the latest one.
-                $known === null ? $row->endsAt : ($known->endsAt === null || $row->endsAt === null ? null : $known->endsAt->max($row->endsAt)),
-                $known === null ? $note : ($known->note === '' || $note === '' ? '' : implode('; ', array_unique([$known->note, $note]))),
-            );
         }
-
-        ksort($found);
-
-        return $found;
     }
 
-    /**
-     * @param  array<string, Found>  $found
-     * @return list<array{AddressEvent, array<string, mixed>, ?Change, array<string, mixed>}> event, new values, what to tell and the previous values
-     */
-    private function plan(Address $address, array $found, bool $trusted): array
+    /** Closes outages about which there is no news any more. */
+    public function forget(): void
+    {
+        foreach (['announced' => true, 'confirmed' => false] as $type => $announced) {
+            $ids = CityEvent::query()->whereNull('closed_at')->where('announced', $announced)
+                ->where('ends_at', '<', now()->subHours((int) config("addresses.forget_hours.{$type}")))->pluck('id');
+
+            if ($ids->isNotEmpty()) {
+                DB::transaction(function () use ($ids) {
+                    CityEvent::query()->whereKey($ids)->update(['closed_at' => now()]);
+                    AddressEvent::query()->whereIn('city_event_id', $ids)->whereNull('ended_at')->update(['ended_at' => now()]);
+                });
+            }
+        }
+    }
+
+    /** @return array{Change, AddressEvent, array{starts_at?: CarbonImmutable, ends_at?: ?CarbonImmutable}}|null */
+    private function update(CityEvent $event, Address $address, ?Found $found, bool $started, bool $late): ?array
     {
         $now = CarbonImmutable::now();
-        $events = $address->events->keyBy(fn (AddressEvent $event) => $this->key($event->kind, $event->starts_at));
-        $active = $events->filter(fn (AddressEvent $event) => $event->ended_at === null);
-        $pairs = [];
+        $known = $address->events->first();
+        $isOpen = $known !== null && $known->ended_at === null;
 
-        foreach ($active as $key => $event) {
-            if (isset($found[$key])) {
-                $pairs[] = [$event, $found[$key]];
-                unset($found[$key], $active[$key]);
-            }
-        }
-        // What is left on both sides may be the same outage with another start.
-        foreach ($active as $key => $event) {
-            foreach ($found as $newKey => $new) {
-                if (! isset($events[$newKey]) && $this->isMoved($event, $new, $now)) {
-                    $pairs[] = [$event, $new];
-                    unset($found[$newKey], $active[$key]);
-
-                    break;
-                }
-            }
-        }
-
-        $plan = [];
-
-        foreach ($pairs as [$event, $new]) {
-            if ($change = $this->update($event, $new, $now)) {
-                $plan[] = $change;
-            }
-        }
-        foreach ($found as $key => $new) {
-            $event = $events[$key] ?? new AddressEvent(['address_id' => $address->id, 'kind' => $new->kind, 'revision' => 0]);
-            $isOver = $new->endsAt !== null && $new->endsAt <= $now;
-            $plan[] = [$event, [
-                'starts_at' => $new->startsAt, 'ends_at' => $new->endsAt, 'note' => $new->note ?: null, 'missing' => 0, 'ended_at' => null,
-                'timed_at' => $now, 'reminded_day_at' => null, 'reminded_at' => null, 'revision' => $event->revision + 1,
-            ], $isOver ? null : Change::Appeared, []];
-        }
-
-        foreach ($trusted ? $active : [] as $event) {
-            $missing = $event->missing + 1;
-
-            if ($missing < (int) config('addresses.missing_polls')) {
-                $plan[] = [$event, ['missing' => $missing], null, []];
-
-                continue;
+        if ($found === null) {
+            if (! $isOpen) {
+                return null;
             }
 
-            $started = $event->starts_at <= $now;
-            $plan[] = [$event, ['missing' => $missing, 'ended_at' => $now, 'revision' => $event->revision + 1], match (true) {
-                ! $started => Change::Cancelled,
-                $this->isForgotten($event, $now) => null,
-                default => Change::Ended,
-            }, []];
+            $this->outbox->forgetAddressReminders($known->id, $known->revision);
+            $change = $known->starts_at > $now && ! $started ? Change::Cancelled : Change::Ended;
+            $known->update(['ended_at' => $now, 'revision' => $known->revision + 1]);
+
+            return [$change, $known, []];
         }
 
-        return $plan;
-    }
+        $values = ['kind' => $found->kind, 'starts_at' => $found->startsAt, 'ends_at' => $found->endsAt, 'note' => $found->note ?: null, 'announced' => $event->announced];
 
-    /** @return array{AddressEvent, array<string, mixed>, ?Change, array<string, mixed>}|null */
-    private function update(AddressEvent $event, Found $new, CarbonImmutable $now): ?array
-    {
-        $moved = ! $event->starts_at->equalTo($new->startsAt);
-        $retimed = $moved || $event->ends_at?->getTimestamp() !== $new->endsAt?->getTimestamp();
-        $values = [];
+        if (! $isOpen) {
+            $known ??= new AddressEvent(['address_id' => $address->id, 'city_event_id' => $event->id, 'revision' => 0]);
+            $known->fill([...$values, 'revision' => $known->revision + 1, 'timed_at' => $now, 'reminded_day_at' => null, 'reminded_at' => null, 'ended_at' => null])->save();
 
-        if ($event->missing > 0) {
-            $values['missing'] = 0;
+            return $late || ($found->endsAt !== null && $found->endsAt <= $now) ? null : [Change::Appeared, $known, []];
         }
-        if (($event->note ?? '') !== $new->note) {
-            $values['note'] = $new->note ?: null;
-        }
-        if ($retimed) {
-            $values += ['starts_at' => $new->startsAt, 'ends_at' => $new->endsAt, 'revision' => $event->revision + 1];
+
+        $old = ['starts_at' => $known->starts_at, 'ends_at' => $known->ends_at];
+        $moved = ! $known->starts_at->equalTo($found->startsAt);
+        $retimed = $moved || $known->ends_at?->getTimestamp() !== $found->endsAt?->getTimestamp();
+
+        if ($started || $retimed) {
+            $this->outbox->forgetAddressReminders($known->id, $known->revision);
+            $values['revision'] = $known->revision + 1;
         }
         if ($moved) {
             $values += ['timed_at' => $now, 'reminded_day_at' => null, 'reminded_at' => null];
         }
 
-        return $values === [] ? null : [$event, $values, $retimed ? Change::Changed : null, ['starts_at' => $event->starts_at, 'ends_at' => $event->ends_at]];
+        $known->update($values);
+
+        return match (true) {
+            $started && ! $late => [Change::Started, $known, $old],
+            $retimed => [Change::Changed, $known, $old],
+            default => null,
+        };
     }
 
-    private function isMoved(AddressEvent $event, Found $new, CarbonImmutable $now): bool
+    /** @param iterable<CityEventRow> $rows of one outage on one street */
+    private function search(string $house, iterable $rows): ?Found
     {
-        if ($event->kind !== $new->kind) {
-            return false;
+        $found = null;
+
+        foreach ($rows as $row) {
+            $note = ($this->houses[$row->houses] ??= new HouseList($row->houses))->match($house);
+
+            if ($note === null) {
+                continue;
+            }
+
+            $found = $found === null ? new Found($row->kind, $row->starts_at, $row->ends_at, $note) : new Found(
+                $found->kind,
+                $found->startsAt->min($row->starts_at),
+                // An unknown end is the latest one.
+                $found->endsAt === null || $row->ends_at === null ? null : $found->endsAt->max($row->ends_at),
+                $found->note === '' || $note === '' ? '' : implode('; ', array_unique([$found->note, $note])),
+            );
         }
 
-        $timezone = config('telegram.timezone');
-
-        return abs($event->starts_at->getTimestamp() - $new->startsAt->getTimestamp()) <= 3600
-            || ($event->starts_at > $now && $new->startsAt > $now
-                && $event->starts_at->setTimezone($timezone)->isSameDay($new->startsAt->setTimezone($timezone)));
-    }
-
-    /** Scheduled works stay in the list for hours after their end: that is not news. */
-    private function isForgotten(AddressEvent $event, CarbonImmutable $now): bool
-    {
-        return $event->kind !== self::EMERGENCY && $event->ends_at !== null
-            && $event->ends_at->addHours((int) config('addresses.silent_end_hours')) < $now;
-    }
-
-    /** @param list<array{Address, list<array{AddressEvent, array<string, mixed>, ?Change, array<string, mixed>}>}> $plans plans of one user */
-    private function save(array $plans): void
-    {
-        DB::transaction(function () use ($plans) {
-            $messages = [];
-
-            foreach ($plans as [$address, $plan]) {
-                // The write goes first: it locks the database and shows that the address still exists.
-                if (Address::query()->whereKey($address->id)->update(['updated_at' => now()]) === 0) {
-                    continue;
-                }
-
-                foreach ($plan as [$event, $values, $change, $old]) {
-                    if ($change === Change::Changed || $change === Change::Cancelled) {
-                        $this->outbox->forgetAddressReminders($event->id, $event->revision);
-                    }
-                    // The bot may have added the same outage meanwhile and shown it.
-                    if (! $event->exists && AddressEvent::query()->where('address_id', $address->id)->where('kind', $event->kind)->where('starts_at', $values['starts_at'])->exists()) {
-                        continue;
-                    }
-
-                    $event->fill($values)->save();
-
-                    if ($change !== null) {
-                        $key = implode('|', [$change->value, $event->kind, $event->starts_at, $event->ends_at, $old['starts_at'] ?? '', $old['ends_at'] ?? '']);
-                        $messages[$key] ??= ['change' => $change, 'old' => $old, 'items' => []];
-                        $messages[$key]['items'][] = [$address, $event];
-                    }
-                }
-            }
-
-            $chat = $plans[0][0]->chat;
-
-            foreach ($chat->active ? $messages : [] as $message) {
-                $this->outbox->address($chat, $message['change'], $message['items'], $message['old']);
-            }
-        });
-    }
-
-    private function key(string $kind, CarbonImmutable $start): string
-    {
-        return $start->getTimestamp().'|'.$kind;
+        return $found;
     }
 }
