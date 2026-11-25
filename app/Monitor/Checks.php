@@ -2,6 +2,8 @@
 
 namespace App\Monitor;
 
+use App\Address\CityRegistry;
+use App\Models\City;
 use App\Models\Delivery;
 use Throwable;
 
@@ -13,7 +15,7 @@ final class Checks
     /** @var array<string, int> start time of conditions that must last */
     private array $since = [];
 
-    public function __construct(private SystemInfo $system, private StatusFiles $files) {}
+    public function __construct(private SystemInfo $system, private StatusFiles $files, private CityRegistry $cities) {}
 
     /** @return list<Problem> */
     public function run(): array
@@ -25,7 +27,7 @@ final class Checks
             $statuses[$service] = $this->files->read($service);
         }
 
-        return [...$this->resources(), ...$this->processes($statuses), ...$this->work($statuses), ...$this->deliveries()];
+        return [...$this->resources(), ...$this->processes($statuses), ...$this->work($statuses), ...$this->deliveries(), ...$this->cities()];
     }
 
     /** @return list<Problem> the monitor has stopped reporting */
@@ -150,6 +152,33 @@ final class Checks
         $this->since[$key] ??= $this->now();
 
         return $this->now() - $this->since[$key] >= (int) config('monitor.sustained');
+    }
+
+    /** @return list<Problem> */
+    private function cities(): array
+    {
+        $problems = [];
+
+        try {
+            $cities = City::query()->whereIn('code', $this->cities->codes())->get();
+        } catch (Throwable) {
+            // An unavailable database is reported by another check.
+            return [];
+        }
+
+        foreach ($cities as $city) {
+            $name = $this->cities->name($city->code);
+            $minutes = (int) config('addresses.stale_minutes');
+
+            if (($city->succeeded_at ?? $city->created_at)->addMinutes($minutes)->isPast()) {
+                $problems[] = new Problem("city:{$city->code}", "Немає даних про відключення за адресами: {$name}", "Останні дані отримано понад {$minutes} хв тому. Джерело недоступне або змінило формат.");
+            }
+            if ($city->shrunk > 0) {
+                $problems[] = new Problem("city_shrunk:{$city->code}", "Підозріло короткий список відключень: {$name}", 'Завершення відключень поки не враховуються.');
+            }
+        }
+
+        return $problems;
     }
 
     private function now(): int

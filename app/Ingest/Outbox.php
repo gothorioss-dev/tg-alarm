@@ -2,6 +2,9 @@
 
 namespace App\Ingest;
 
+use App\Address\Change;
+use App\Models\Address;
+use App\Models\AddressEvent;
 use App\Models\Chat;
 use App\Models\Delivery;
 use App\Schedule\ChangeImpact;
@@ -133,5 +136,36 @@ final class Outbox
             'available_at' => now(),
             'expires_at' => $expiresAt,
         ]);
+    }
+
+    /**
+     * @param  non-empty-list<array{Address, AddressEvent}>  $items  the same outage at different addresses
+     * @param  array{starts_at?: CarbonImmutable, ends_at?: ?CarbonImmutable}  $old
+     */
+    public function address(Chat $chat, Change $change, array $items, array $old): void
+    {
+        $event = $items[0][1];
+        $addresses = array_map(fn (array $item) => $item[0]->id, $items);
+        // "Over" must not be read as "the light is on" while another outage goes on.
+        $others = $change === Change::Ended && AddressEvent::query()->whereIn('address_id', $addresses)->whereNull('ended_at')
+            ->where('starts_at', '<=', now())->where(fn ($query) => $query->whereNull('ends_at')->orWhere('ends_at', '>', now()))->exists();
+        $end = $event->ends_at !== null && $event->ends_at->isFuture() ? $event->ends_at : CarbonImmutable::now()->addHours(6);
+
+        $this->push($chat->telegram_id, "address:{$change->value}:{$event->id}:{$event->revision}", $this->messages->addressChange($change, $items, $old, $others), $end);
+    }
+
+    /** @param non-empty-list<array{Address, AddressEvent}> $items the same outage at different addresses */
+    public function addressReminder(Chat $chat, string $type, array $items, CarbonImmutable $now): void
+    {
+        $event = $items[0][1];
+
+        $this->push($chat->telegram_id, "remind:address:{$type}:{$event->id}:{$event->revision}", $this->messages->addressReminder($items, $now), $event->starts_at);
+    }
+
+    /** Reminders with an outdated time that have not been sent yet. */
+    public function forgetAddressReminders(int $eventId, int $revision): void
+    {
+        Delivery::query()->whereIn('dedupe_key', ["remind:address:reminded_day_at:{$eventId}:{$revision}", "remind:address:reminded_at:{$eventId}:{$revision}"])
+            ->where('status', Delivery::PENDING)->update(['status' => Delivery::EXPIRED]);
     }
 }

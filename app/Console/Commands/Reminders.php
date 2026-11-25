@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Address\AddressReminders;
 use App\Ingest\Reminders as ReminderQueue;
 use App\Monitor\ProcessStatus;
 use App\Telegram\DeliveryChannel;
@@ -17,7 +18,7 @@ class Reminders extends Command
 
     protected $description = 'Send reminders and service alerts independently of broadcasts';
 
-    public function handle(ReminderQueue $reminders, DeliverySender $sender, ProcessStatus $status): int
+    public function handle(ReminderQueue $reminders, AddressReminders $addresses, DeliverySender $sender, ProcessStatus $status): int
     {
         $running = true;
         $this->trap([SIGTERM, SIGINT], function () use (&$running) {
@@ -28,7 +29,7 @@ class Reminders extends Command
         $until = time() + 6 * 3600;
 
         do {
-            foreach ([$reminders->queueDue(...), fn () => $sender->flush(DeliveryChannel::Urgent)] as $step) {
+            foreach ([$reminders->queueDue(...), $addresses->queueDue(...), fn () => $sender->flush(DeliveryChannel::Urgent)] as $step) {
                 try {
                     $step();
                 } catch (Throwable $e) {

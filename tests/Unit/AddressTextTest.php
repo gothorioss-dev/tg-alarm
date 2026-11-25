@@ -1,0 +1,81 @@
+<?php
+
+namespace Tests\Unit;
+
+use App\Address\AddressText;
+use App\Address\HouseList;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\TestCase;
+
+class AddressTextTest extends TestCase
+{
+    #[DataProvider('houses')]
+    public function test_house_is_found_in_the_list(string $list, string $house, ?string $note): void
+    {
+        $this->assertSame($note, (new HouseList($list))->match($house));
+    }
+
+    public static function houses(): array
+    {
+        return [
+            ['9|10|13а', '13А', ''],
+            ['9|10|13а', '13', null],
+            ['9|10|13', '13а', null],
+            ['11A', '11а', ''],
+            ['53 Б', '53б', ''],
+            ['20-а', '20а', ''],
+            ['22-28', '24', ''],
+            ['22-28', '28', ''],
+            ['22-28', '25', null],
+            ['22-28', '24а', ''],
+            ['21-33', '22', null],
+            ['1-4', '2', ''],
+            ['134-182 парні', '150', ''],
+            ['134-182 парні', '151', null],
+            ['249-293 непарні', '251', ''],
+            ['6 (5 пов)', '6', '5 пов'],
+            ['20(3ф)', '20', '3ф'],
+            ['1  (1 та 2 пов)', '1', '1 та 2 пов'],
+            ['5 (1, 2 пов)|7', '7', ''],
+            ['6 (5 пов)|6', '6', ''],
+            ['21 п.1-4|21 п.5-8', '21', 'п.1-4; п.5-8'],
+            ['43/Тургенєва24', '43', 'тургенєва24'],
+            ['115/5', '115/5', ''],
+            ['115/5', '115', null],
+            ['11,13', '13', ''],
+            ['72а,б,в', '72в', ''],
+            ['Депутатська 73', 'депутатська 73', ''],
+            ['Депутатська 73', '73', null],
+            ['1||2', '2', ''],
+            ['', '2', 'номери будинків не вказано'],
+            ['повністю', '2', ''],
+            ['1–19/1', '7', ''],
+            ['2-14/2', '14', ''],
+            ['19кв2', '19', 'кв2'],
+        ];
+    }
+
+    #[DataProvider('inputs')]
+    public function test_input_is_split(string $text, string $street, ?string $house): void
+    {
+        $this->assertSame([$street, $house], AddressText::split($text));
+    }
+
+    public static function inputs(): array
+    {
+        return [
+            ['Соборний 150', 'Соборний', '150'],
+            ['пр. Соборний, буд. 150 а', 'пр. Соборний', '150 а'],
+            ['вул. 8 Березня, 12/2', 'вул. 8 Березня', '12/2'],
+            ['Соборний, 150, кв. 5', 'Соборний', '150'],
+            ['29-а вулиця', '29-а вулиця', null],
+            ['8 Березня', '8 Березня', null],
+            ['Соборний', 'Соборний', null],
+        ];
+    }
+
+    public function test_unknown_parts_are_reported(): void
+    {
+        $this->assertSame(['возлеЗНЦТИ'], (new HouseList('1|возлеЗНЦТИ|2-4'))->unknown());
+    }
+}

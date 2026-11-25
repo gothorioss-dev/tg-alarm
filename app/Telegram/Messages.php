@@ -2,6 +2,12 @@
 
 namespace App\Telegram;
 
+use App\Address\Change;
+use App\Address\CityRegistry;
+use App\Models\Address;
+use App\Models\AddressEvent;
+use App\Models\City;
+use App\Models\Street;
 use App\Schedule\ChangeImpact;
 use App\Schedule\DaySchedule;
 use App\Schedule\Interval;
@@ -15,7 +21,7 @@ final class Messages
 {
     private const MONTHS = ['січня', 'лютого', 'березня', 'квітня', 'травня', 'червня', 'липня', 'серпня', 'вересня', 'жовтня', 'листопада', 'грудня'];
 
-    public function __construct(private SourceRegistry $sources) {}
+    public function __construct(private SourceRegistry $sources, private CityRegistry $cities) {}
 
     /** @param list<string> $queues */
     public function newSchedule(string $date, DaySchedule $day, array $queues, string $source, string $url): string
@@ -124,6 +130,7 @@ final class Messages
             ."<b>Кнопки внизу</b>\n"
             ."📅 <b>Графік</b> — відключення на сьогодні та завтра\n"
             ."⚡ <b>Мої черги</b> — додати або прибрати чергу\n"
+            ."🏠 <b>Моя адреса</b> — аварійні та ремонтні відключення за адресою ({$this->cityNames()})\n"
             ."🔔 <b>Сповіщення</b> — звук і нагадування перед відключенням\n"
             ."📖 <b>Довідник</b> — ця підказка\n"
             ."👥 <b>Запросити</b> — надіслати бота рідним або сусідам\n\n"
@@ -334,5 +341,166 @@ final class Messages
     private function maxQueues(): int
     {
         return (int) config('telegram.max_queues');
+    }
+
+    /** @param list<Address> $addresses with active events */
+    public function addresses(array $addresses): string
+    {
+        $text = "🏠 <b>Моя адреса</b>\n\n";
+
+        if ($addresses === []) {
+            return $text."Додайте адресу — і я повідомлю про аварійні, термінові та планові відключення саме за нею. Черга для цього не потрібна.\n\n"
+                ."Поки що доступно: {$this->cityNames()}. Можна додати до ".config('addresses.max_addresses').' адрес.';
+        }
+
+        $blocks = array_map(function (Address $address) {
+            $events = $address->events->whereNull('ended_at');
+            $lines = $events->take(5)->map(fn (AddressEvent $event) => $this->addressEvent($event))->all();
+
+            if ($events->count() > 5) {
+                $lines[] = 'Ще: '.($events->count() - 5);
+            }
+
+            return '<b>'.e($this->addressLabel($address)).'</b>'
+                .($address->house_known === false ? "\n⚠️ Будинку немає у списку обленерго, перевірте номер." : '')
+                ."\n".($lines === [] ? 'Відключень у списку немає' : implode("\n", $lines));
+        }, $addresses);
+
+        return $text.implode("\n\n", $blocks)."\n\n".$this->checkedAt($addresses)."Графік за чергами тут не враховано.\n".$this->cityFooter($addresses[0]->city);
+    }
+
+    public function addressDraft(string $step, ?string $problem, ?Street $street): string
+    {
+        $title = "🏠 <b>Нова адреса</b>\n\n";
+        $hint = match ($problem) {
+            'unknown' => "Такої вулиці не знайдено. Перевірте назву й спробуйте ще раз.\n\n",
+            'many' => "Знайдено забагато вулиць. Напишіть назву повніше.\n\n",
+            'loading' => "Список вулиць ще завантажується. Спробуйте за кілька хвилин.\n\n",
+            'house' => "Не вдалося розпізнати номер будинку.\n\n",
+            default => '',
+        };
+
+        return $title.$hint.match ($step) {
+            'city' => 'Оберіть місто.',
+            'choose' => 'Оберіть вулицю. Якщо її тут немає, напишіть назву інакше.',
+            'house' => 'Вулиця: <b>'.e(trim((string) $street?->name))."</b>\n\nНапишіть номер будинку, наприклад: 12а",
+            default => "Напишіть вулицю та будинок одним повідомленням, наприклад:\n<code>Соборний 150</code>\n\nСтара назва вулиці теж підійде. Номер квартири не потрібен.",
+        };
+    }
+
+    public function addressAdded(): string
+    {
+        return 'Адресу збережено';
+    }
+
+    public function addressRemoved(): string
+    {
+        return 'Адресу видалено';
+    }
+
+    public function tooManyAddresses(): string
+    {
+        return 'Можна додати до '.config('addresses.max_addresses').' адрес. Щоб додати іншу, спочатку видаліть одну з наявних.';
+    }
+
+    /**
+     * @param  non-empty-list<array{Address, AddressEvent}>  $items
+     * @param  array{starts_at?: CarbonImmutable, ends_at?: ?CarbonImmutable}  $old
+     */
+    public function addressChange(Change $change, array $items, array $old, bool $others): string
+    {
+        $event = $items[0][1];
+        $kind = $this->addressKind($event->kind);
+        $title = match ($change) {
+            Change::Appeared => ($event->starts_at->isFuture() ? '🗓' : '🚨')." <b>{$kind}</b>",
+            Change::Changed => "🔄 <b>Змінено час: {$kind}</b>",
+            Change::Cancelled => "✅ <b>Скасовано: {$kind}</b>",
+            Change::Ended => "✅ <b>Завершено: {$kind}</b>",
+        };
+        $time = match ($change) {
+            Change::Changed => 'Було: '.$this->addressTime($old['starts_at'] ?? $event->starts_at, $old['ends_at'] ?? null)
+                ."\nТепер: ".$this->addressTime($event->starts_at, $event->ends_at),
+            default => $this->addressTime($event->starts_at, $event->ends_at),
+        };
+        $note = match ($change) {
+            Change::Ended => "\n\nЗа даними обленерго відключення більше немає у списку.".($others ? ' Але за цією адресою діє інше відключення.' : ''),
+            Change::Cancelled => "\n\nЗа даними обленерго цього відключення більше немає у списку.",
+            default => '',
+        };
+
+        return "{$title}\n{$this->addressLines($items)}\n\n{$time}{$note}\n\n".$this->cityFooter($items[0][0]->city);
+    }
+
+    /** @param non-empty-list<array{Address, AddressEvent}> $items */
+    public function addressReminder(array $items, CarbonImmutable $now): string
+    {
+        $event = $items[0][1];
+
+        return "⏰ <b>Через {$this->duration($now, $event->starts_at)}: {$this->addressKind($event->kind)}</b>\n"
+            ."{$this->addressLines($items)}\n\n{$this->addressTime($event->starts_at, $event->ends_at)}\n\n".$this->cityFooter($items[0][0]->city);
+    }
+
+    /** @param list<array{Address, AddressEvent}> $items */
+    private function addressLines(array $items): string
+    {
+        return implode("\n", array_map(
+            fn (array $item) => '🏠 '.e($this->addressLabel($item[0])).($item[1]->note === null ? '' : ' ('.e($item[1]->note).')'),
+            $items,
+        ));
+    }
+
+    private function addressLabel(Address $address): string
+    {
+        $city = count($this->cities->codes()) > 1 ? $this->cities->name($address->city->code).', ' : '';
+
+        return $city.trim($address->street->name).', '.$address->house;
+    }
+
+    private function addressEvent(AddressEvent $event): string
+    {
+        $isOver = $event->ends_at !== null && $event->ends_at->isPast();
+
+        return '• '.$this->addressKind($event->kind).': '.$this->addressTime($event->starts_at, $event->ends_at)
+            .($isOver ? ' (час минув, але запис ще у списку)' : '')
+            .($event->note === null ? '' : ' ('.e($event->note).')');
+    }
+
+    private function addressKind(string $kind): string
+    {
+        return match ($kind) {
+            'Аварійне відключення' => 'Аварійне відключення',
+            'Термінова' => 'Терміновий ремонт',
+            'Планова' => 'Плановий ремонт',
+            '' => 'Відключення',
+            default => e($kind),
+        };
+    }
+
+    private function addressTime(CarbonImmutable $start, ?CarbonImmutable $end): string
+    {
+        $start = $start->setTimezone(config('telegram.timezone'));
+        $text = "{$this->date($start->format('Y-m-d'))}, з {$start->format('H:i')}";
+
+        return $end === null
+            ? $text.', час відновлення невідомий'
+            : $text.' до '.$this->endTime($end->setTimezone(config('telegram.timezone')), $start);
+    }
+
+    /** @param non-empty-list<Address> $addresses */
+    private function checkedAt(array $addresses): string
+    {
+        $checkedAt = $addresses[0]->city->succeeded_at;
+
+        return $checkedAt === null ? '' : '<i>Дані на '.$checkedAt->setTimezone(config('telegram.timezone'))->format('H:i, d.m')."</i>\n";
+    }
+
+    private function cityFooter(City $city): string
+    {
+        return '<a href="'.e($this->cities->page($city->code)).'">Джерело: '.e($this->cities->label($city->code)).'</a>';
+    }
+
+    private function cityNames(): string
+    {
+        return e(implode(', ', array_map($this->cities->name(...), $this->cities->codes())));
     }
 }

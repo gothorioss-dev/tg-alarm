@@ -2,6 +2,7 @@
 
 namespace App\Telegram;
 
+use App\Address\CityRegistry;
 use App\Models\Chat;
 use App\Models\SourceState;
 use App\Monitor\ProcessStatus;
@@ -22,7 +23,7 @@ final class UpdateHandler
     /** @var array<int, array{screen: string, message: ?int, due: int, until: int}> replies delayed by a Telegram limit by chat id, time in seconds */
     private array $delayed = [];
 
-    public function __construct(private TelegramClient $telegram, private Messages $messages, private Statistics $statistics, private RateLimiter $limiter, private PressSeries $series, private ProcessStatus $status) {}
+    public function __construct(private TelegramClient $telegram, private Messages $messages, private Statistics $statistics, private RateLimiter $limiter, private PressSeries $series, private ProcessStatus $status, private AddressDialog $addresses, private CityRegistry $cities) {}
 
     /** @param array<string, mixed> $update */
     public function handle(array $update): void
@@ -73,12 +74,24 @@ final class UpdateHandler
         $chat = $this->chat((int) $message['chat']['id']);
 
         if (preg_match('/^\/start(\s|$)/', $text)) {
+            $this->addresses->cancel($chat);
             $this->present($chat, 'start');
 
             return;
         }
         if ($screen = Keyboards::screen($text, $chat->telegram_id)) {
+            $this->addresses->cancel($chat);
             $this->present($chat, $screen, pressedId: (int) $message['message_id']);
+
+            return;
+        }
+        if ($this->addresses->isWaiting($chat)) {
+            $this->present($chat, $this->addresses->text($chat, $text) ? 'address' : 'address_draft');
+
+            return;
+        }
+        if (! $chat->subscriptions()->exists() && $chat->addresses()->exists()) {
+            $this->present($chat, 'address');
 
             return;
         }
@@ -109,7 +122,20 @@ final class UpdateHandler
         $data = self::LEGACY[$data] ?? $data;
         [$toast, $alert] = [null, false];
 
-        if (preg_match('/^q([+-]?):(.*)$/', $data, $match)) {
+        if (! preg_match('/^as:/', $data)) {
+            $this->addresses->cancel($chat);
+        }
+
+        if (preg_match('/^a\+(?::(.+))?$/', $data, $match)) {
+            $limited = $this->addresses->begin($chat, $match[1] ?? null) !== null;
+            [$toast, $alert, $data] = $limited ? [$this->messages->tooManyAddresses(), true, 'address'] : [null, false, 'address_draft'];
+        } elseif (preg_match('/^as:(\d+)$/', $data, $match)) {
+            $added = $this->addresses->chooseStreet($chat, (int) $match[1]);
+            [$toast, $data] = $added ? [$this->messages->addressAdded(), 'address'] : [null, 'address_draft'];
+        } elseif (preg_match('/^a-:(\d+)$/', $data, $match)) {
+            $toast = $this->addresses->remove($chat, (int) $match[1]) ? $this->messages->addressRemoved() : null;
+            $data = 'address';
+        } elseif (preg_match('/^q([+-]?):(.*)$/', $data, $match)) {
             [$toast, $alert] = $this->selectQueue($chat, $match[2], $match[1]);
             $data = 'queue';
         } elseif (str_starts_with($data, 'r:')) {
@@ -128,7 +154,7 @@ final class UpdateHandler
 
         $this->answer($query['id'], $toast, $alert);
 
-        if (in_array($data, ['schedule', 'queue', 'settings', 'help'], true)) {
+        if (in_array($data, ['schedule', 'queue', 'settings', 'help', 'address', 'address_draft'], true)) {
             $this->present($chat, $data, $messageId);
         }
     }
@@ -206,6 +232,8 @@ final class UpdateHandler
             'queue' => $this->showQueues($chat, $messageId),
             'settings' => $this->render($chat, $this->messages->settings($chat->silent, $chat->remind_minutes), Keyboards::settings($chat), $messageId),
             'help' => $this->render($chat, $this->messages->guide(), null, $messageId),
+            'address' => $this->showAddresses($chat, $messageId),
+            'address_draft' => $this->showAddressDraft($chat, $messageId),
             'invite' => $this->showInvite($chat, $messageId),
             'stats' => $this->render($chat, $this->messages->statistics($this->statistics->collect()), null, $messageId),
         };
@@ -381,6 +409,11 @@ final class UpdateHandler
         $text = trim($message['text']);
         $screen = preg_match('/^\/start(\s|$)/', $text) ? 'start' : Keyboards::screen($text, (int) $message['chat']['id']);
 
+        // Different answers about an address are different actions.
+        if ($screen === null && Chat::query()->where('telegram_id', (int) $message['chat']['id'])->whereNotNull('address_draft')->exists()) {
+            $screen = 'address:'.md5($text);
+        }
+
         return ['message:'.($screen ?? 'schedule'), (int) config('telegram.repeat_pause.screen')];
     }
 
@@ -494,5 +527,29 @@ final class UpdateHandler
     private function replyExpires(): int
     {
         return (int) config('telegram.reply_expires');
+    }
+
+    private function showAddresses(Chat $chat, ?int $messageId = null): int
+    {
+        $addresses = $chat->addresses()->with(['street', 'city', 'events'])->get()->all();
+
+        return $this->render($chat, $this->messages->addresses($addresses), Keyboards::addresses($addresses), $messageId);
+    }
+
+    private function showAddressDraft(Chat $chat, ?int $messageId = null): int
+    {
+        $draft = $chat->address_draft;
+
+        // Finished or cancelled meanwhile.
+        if ($draft === null || ! $this->addresses->isWaiting($chat)) {
+            return $this->showAddresses($chat, $messageId);
+        }
+
+        return $this->render(
+            $chat,
+            $this->messages->addressDraft($draft['step'], $draft['problem'] ?? null, $this->addresses->street($chat)),
+            Keyboards::addressDraft($draft['step'], $this->addresses->options($chat), $this->cities),
+            $messageId,
+        );
     }
 }

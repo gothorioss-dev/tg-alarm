@@ -2,7 +2,10 @@
 
 namespace App\Telegram;
 
+use App\Address\CityRegistry;
+use App\Models\Address;
 use App\Models\Chat;
+use App\Models\Street;
 use App\Schedule\Queues;
 
 /** Keyboards of the bot screens. */
@@ -24,6 +27,8 @@ final class Keyboards
     /** Shown to the admin only. */
     public const STATISTICS = '📊 Статистика';
 
+    public const ADDRESS = '🏠 Моя адреса';
+
     /**
      * Main menu. A message carries either this or inline buttons.
      *
@@ -34,8 +39,9 @@ final class Keyboards
         return [
             'keyboard' => [
                 [['text' => self::SCHEDULE], ['text' => self::QUEUES]],
-                [['text' => self::SETTINGS], ['text' => self::GUIDE]],
-                [['text' => self::INVITE], ...(self::isAdmin($telegramId) ? [['text' => self::STATISTICS]] : [])],
+                [['text' => self::ADDRESS], ['text' => self::SETTINGS]],
+                [['text' => self::GUIDE], ['text' => self::INVITE]],
+                ...(self::isAdmin($telegramId) ? [[['text' => self::STATISTICS]]] : []),
             ],
             'resize_keyboard' => true,
         ];
@@ -64,6 +70,7 @@ final class Keyboards
             $plain(self::SETTINGS), $plain(self::OLD_SETTINGS) => 'settings',
             $plain(self::GUIDE) => 'help',
             $plain(self::INVITE) => 'invite',
+            $plain(self::ADDRESS) => 'address',
             $plain(self::STATISTICS) => self::isAdmin($telegramId) ? 'stats' : null,
             default => null,
         };
@@ -121,5 +128,35 @@ final class Keyboards
     private static function inline(string $text, string $data): array
     {
         return ['text' => $text, 'callback_data' => $data];
+    }
+
+    /**
+     * @param  list<Address>  $addresses
+     * @return array<string, mixed>
+     */
+    public static function addresses(array $addresses): array
+    {
+        $rows = array_map(fn (Address $address) => [self::inline("🗑 {$address->street->name}, {$address->house}", "a-:{$address->id}")], $addresses);
+
+        if (count($addresses) < (int) config('addresses.max_addresses')) {
+            $rows[] = [self::inline('➕ Додати адресу', 'a+')];
+        }
+
+        return ['inline_keyboard' => $rows];
+    }
+
+    /**
+     * @param  list<Street>  $streets
+     * @return array<string, mixed>
+     */
+    public static function addressDraft(string $step, array $streets, CityRegistry $cities): array
+    {
+        $rows = match ($step) {
+            'city' => array_map(fn (string $code) => [self::inline($cities->name($code), "a+:{$code}")], $cities->codes()),
+            'choose' => array_map(fn (Street $street) => [self::inline($street->name, "as:{$street->id}")], $streets),
+            default => [],
+        };
+
+        return ['inline_keyboard' => [...$rows, [self::inline('Скасувати', 'address')]]];
     }
 }
