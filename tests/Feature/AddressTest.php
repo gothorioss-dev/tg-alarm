@@ -260,6 +260,33 @@ class AddressTest extends TestCase
         $this->assertCount(4, $this->texts());
     }
 
+    public function test_file_of_an_extension_is_believed_and_a_new_kind_is_told(): void
+    {
+        $this->follow('пр. Соборний', '24');
+        $id = $this->publish(self::ACTUAL, null, 'ЗМЕМ_ПСР_5_25_11_26.xlsx', [['пр. Соборний', '22-28', 'термінові роботи', '25.11.26', '12-00', '25.11.26', '17-00']]);
+        $this->poll();
+        $this->assertStringContainsString('Терміновий ремонт', $this->last());
+        $extended = 'Шановні споживачі! Увага!  Зміна орієнтовного часу відновлення електропостачання. Аварійні роботи продовжено до 12-00  26.11.2026';
+
+        // The text and the file agree: only users hear of it.
+        $reply = $this->publish($extended, $id, 'ЗМЕМ_ПСР_8_25_11_26.xlsx', [['пр. Соборний', '22-28', 'термінові роботи', '25.11.26', '12-00', '26.11.26', '12-00']]);
+        $this->poll();
+        $this->assertStringContainsString('Змінено час: Терміновий ремонт', $this->last());
+        $this->assertStringContainsString('до 12:00 (26 листопада)', $this->last());
+        $this->assertSame(ChannelPost::DONE, ChannelPost::query()->where('message_id', $reply)->value('status'));
+
+        // The file says another time and kind: it is believed, the admin is warned.
+        $this->publish($extended, $reply, 'ЗМЕМ_ПСР_8_26_11_26.xlsx', [['пр. Соборний', '22-28', 'аварійна', '25.11.26', '12-00', '26.11.26', '15-00']]);
+        $this->poll();
+        $user = (string) Delivery::query()->where('telegram_id', 5)->latest('id')->value('text');
+        $this->assertStringContainsString('Змінено: Аварійне відключення', $user);
+        $this->assertStringContainsString('Було: Терміновий ремонт', $user);
+        $this->assertStringContainsString('до 15:00 (26 листопада)', $user);
+        $admin = (string) Delivery::query()->where('telegram_id', 999)->latest('id')->value('text');
+        $this->assertStringContainsString('текст: 26.11.2026 12:00, файл: 26.11.2026 15:00', $admin);
+        $this->assertFalse(Delivery::query()->where('text', 'like', '%Незрозуміла%')->exists());
+    }
+
     public function test_announcement_start_and_reminders(): void
     {
         $this->follow('пр. Соборний', '24');

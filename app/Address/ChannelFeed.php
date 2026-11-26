@@ -25,8 +25,6 @@ final class ChannelFeed implements OutageFeed
 
     private const RESTORED = '/^(?:Шановні споживачі\W*)?(?:Увага\W*)?Електропостачання\s+(?:повністю\s+)?відновлено(?:\s+повністю)?\W*$/ui';
 
-    private const PARTIAL = '/Електропостачання\s+(?:частково\s+відновлено|відновлено\s+частково)/ui';
-
     private const EXTENDED = '/продовжено\s+до\s+(\d{1,2})[-:.](\d{2})\s+(\d{1,2})\.(\d{1,2})\.(\d{4})/ui';
 
     private int $downloads = 0;
@@ -233,10 +231,11 @@ final class ChannelFeed implements OutageFeed
             return;
         }
 
-        $isPartial = $post->file !== null && preg_match(self::PARTIAL, $post->text) === 1;
-        $end = $post->file === null && preg_match(self::EXTENDED, $post->text, $match) === 1 ? $this->end($match) : null;
+        // A new file is the list of what remains, whatever the text says: a partial restoration, an extension.
+        $hasFile = $post->file !== null;
+        $end = preg_match(self::EXTENDED, $post->text, $match) === 1 ? $this->end($match) : null;
 
-        if (! $isRestored && ! $isPartial && $end === null) {
+        if (! $isRestored && ! $hasFile && $end === null) {
             $post->update(['status' => ChannelPost::SKIPPED, 'city_event_id' => $event->id]);
 
             if (! $post->silent) {
@@ -247,7 +246,11 @@ final class ChannelFeed implements OutageFeed
             return;
         }
 
-        $rows = $isPartial ? $this->rows($post) : [];
+        $rows = $hasFile ? $this->rows($post) : [];
+
+        if ($rows !== [] && $end !== null && ! $post->silent) {
+            $this->checkEnd($city, $post, $rows, $end);
+        }
 
         DB::transaction(function () use ($city, $post, $event, $isRestored, $rows, $end) {
             $post->update(['status' => ChannelPost::DONE, 'city_event_id' => $event->id]);
@@ -268,6 +271,23 @@ final class ChannelFeed implements OutageFeed
 
             $this->tracker->apply($event, ! $post->silent, $started, $this->isLate($post));
         });
+    }
+
+    /**
+     * The file is believed, but the admin learns that the text says otherwise.
+     *
+     * @param  non-empty-list<FileRow>  $rows
+     */
+    private function checkEnd(City $city, ChannelPost $post, array $rows, CarbonImmutable $end): void
+    {
+        $fileEnd = max(array_map(fn (FileRow $row) => $row->endsAt ?? $row->startsAt, $rows));
+
+        if (! $fileEnd->equalTo($end)) {
+            $zone = config('telegram.timezone');
+            $this->outbox->admin("post-end:{$city->code}:{$post->message_id}:".substr($post->hash, 0, 8),
+                "Час відновлення в тексті й у файлі різний, взято з файлу: https://t.me/{$this->channel}/{$post->message_id}\n"
+                ."текст: {$end->setTimezone($zone)->format('d.m.Y H:i')}, файл: {$fileEnd->setTimezone($zone)->format('d.m.Y H:i')}");
+        }
     }
 
     /** The post that is answered; an old one is read from the channel. */

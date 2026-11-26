@@ -47,7 +47,7 @@ final class AddressTracker
 
                     if ($result !== null) {
                         [$change, $addressEvent, $old] = $result;
-                        $key = implode('|', [$change->value, $addressEvent->kind, $addressEvent->starts_at, $addressEvent->ends_at, $old['starts_at'] ?? '', $old['ends_at'] ?? '']);
+                        $key = implode('|', [$change->value, $addressEvent->kind, $addressEvent->starts_at, $addressEvent->ends_at, $old['starts_at'] ?? '', $old['ends_at'] ?? '', $old['kind'] ?? '']);
                         $messages[$key] ??= ['change' => $change, 'old' => $old, 'items' => []];
                         $messages[$key]['items'][] = [$address, $addressEvent];
                     }
@@ -95,7 +95,7 @@ final class AddressTracker
         }
     }
 
-    /** @return array{Change, AddressEvent, array{starts_at?: CarbonImmutable, ends_at?: ?CarbonImmutable}}|null */
+    /** @return array{Change, AddressEvent, array{starts_at?: CarbonImmutable, ends_at?: ?CarbonImmutable, kind?: string}}|null */
     private function update(CityEvent $event, Address $address, ?Found $found, bool $started, bool $late): ?array
     {
         $now = CarbonImmutable::now();
@@ -127,6 +127,11 @@ final class AddressTracker
         $moved = ! $known->starts_at->equalTo($found->startsAt);
         $retimed = $moved || $known->ends_at?->getTimestamp() !== $found->endsAt?->getTimestamp();
 
+        // An urgent repair can turn out to be an emergency.
+        if ($known->kind !== $found->kind) {
+            $old['kind'] = $known->kind;
+            $retimed = true;
+        }
         if ($started || $retimed) {
             $this->outbox->forgetAddressReminders($known->id, $known->revision);
             $values['revision'] = $known->revision + 1;

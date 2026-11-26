@@ -408,7 +408,7 @@ final class Messages
 
     /**
      * @param  non-empty-list<array{Address, AddressEvent}>  $items
-     * @param  array{starts_at?: CarbonImmutable, ends_at?: ?CarbonImmutable}  $old
+     * @param  array{starts_at?: CarbonImmutable, ends_at?: ?CarbonImmutable, kind?: string}  $old
      */
     public function addressChange(Change $change, array $items, array $old, bool $others): string
     {
@@ -417,13 +417,14 @@ final class Messages
         $title = match ($change) {
             Change::Appeared => ($event->starts_at->isFuture() ? '🗓' : '🚨')." <b>{$kind}</b>",
             Change::Started => "🚨 <b>Почалося: {$kind}</b>",
-            Change::Changed => "🔄 <b>Змінено час: {$kind}</b>",
+            Change::Changed => isset($old['kind']) ? "🔄 <b>Змінено: {$kind}</b>" : "🔄 <b>Змінено час: {$kind}</b>",
             Change::Cancelled => "✅ <b>Скасовано: {$kind}</b>",
             Change::Ended => "✅ <b>Завершено: {$kind}</b>",
         };
         $time = match ($change) {
-            Change::Changed => 'Було: '.$this->addressTime($old['starts_at'] ?? $event->starts_at, $old['ends_at'] ?? null)
-                ."\nТепер: ".$this->addressTime($event->starts_at, $event->ends_at),
+            Change::Changed => 'Було: '.(isset($old['kind']) ? $this->addressKind($old['kind']).', ' : '')
+                .$this->addressTime($old['starts_at'] ?? $event->starts_at, $old['ends_at'] ?? null)
+                ."\nТепер: ".(isset($old['kind']) ? "{$kind}, " : '').$this->addressTime($event->starts_at, $event->ends_at),
             default => $this->addressTime($event->starts_at, $event->ends_at),
         };
         $note = match ($change) {
