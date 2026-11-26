@@ -50,6 +50,8 @@ class AddressTest extends TestCase
 
     private Chat $chat;
 
+    private int $nextId = 60;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -89,7 +91,7 @@ class AddressTest extends TestCase
             return Http::response($this->files[(int) basename($url)]);
         }
 
-        return Http::response(['ok' => true, 'result' => ['message_id' => 60]]);
+        return Http::response(['ok' => true, 'result' => ['message_id' => str_ends_with($url, 'sendMessage') ? $this->nextId++ : 60]]);
     }
 
     private function page(?string $before): string
@@ -197,9 +199,15 @@ class AddressTest extends TestCase
         return $this->update(['message' => ['message_id' => 50, 'text' => $text, 'chat' => ['id' => 5, 'type' => 'private']]]);
     }
 
-    private function press(string $data): string
+    private function press(string $data, int $messageId = 1): string
     {
-        return $this->update(['callback_query' => ['id' => 'x', 'data' => $data, 'message' => ['message_id' => 1, 'chat' => ['id' => 5, 'type' => 'private']]]]);
+        return $this->update(['callback_query' => ['id' => 'x', 'data' => $data, 'message' => ['message_id' => $messageId, 'chat' => ['id' => 5, 'type' => 'private']]]]);
+    }
+
+    private function assertDeleted(int $id, bool $deleted = true): void
+    {
+        $check = fn ($r) => str_ends_with($r->url(), 'deleteMessages') && in_array($id, $r['message_ids'], true);
+        $deleted ? Http::assertSent($check) : Http::assertNotSent($check);
     }
 
     private function update(array $update): string
@@ -592,5 +600,34 @@ class AddressTest extends TestCase
 
         $this->artisan('app:addresses', ['--once' => true])->assertSuccessful();
         $this->assertSame(Delivery::SENT, Delivery::query()->where('dedupe_key', 'like', 'address:%')->sole()->status);
+    }
+
+    public function test_list_of_addresses_stays_while_there_is_one(): void
+    {
+        $this->say(Keyboards::ADDRESS); // 60, empty
+        $this->say(Keyboards::SCHEDULE); // 61
+        $this->assertDeleted(60);
+
+        $this->say(Keyboards::ADDRESS); // 62
+        $this->press('a+', 62);
+        $this->say('Соборний 150'); // 63, the list
+        $this->assertNull($this->chat->refresh()->menu_message_id);
+        $this->say(Keyboards::SCHEDULE); // 64
+        $this->say(Keyboards::SETTINGS); // 65
+        $this->assertDeleted(63, false);
+
+        // The draft does not take the place of a kept list.
+        $this->press('a+', 63); // 66
+        $this->assertSame(66, $this->chat->refresh()->menu_message_id);
+        $this->assertDeleted(65);
+        $this->say(Keyboards::SCHEDULE); // 67
+        $this->assertDeleted(66);
+        $this->assertDeleted(63, false);
+
+        // Without addresses the list is a service screen again.
+        $this->press('a-:'.Address::query()->sole()->id, 63);
+        $this->assertSame(63, $this->chat->refresh()->menu_message_id);
+        $this->say(Keyboards::GUIDE); // 68
+        $this->assertDeleted(63);
     }
 }

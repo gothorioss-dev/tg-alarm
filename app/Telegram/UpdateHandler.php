@@ -156,7 +156,10 @@ final class UpdateHandler
 
         $this->answer($query['id'], $toast, $alert);
 
-        if (in_array($data, ['schedule', 'queue', 'settings', 'help', 'address', 'address_draft'], true)) {
+        if ($data === 'address_draft' && $chat->menu_message_id !== $messageId) {
+            // A kept list of addresses stays; the draft goes to a new service message.
+            $this->present($chat, $data);
+        } elseif (in_array($data, ['schedule', 'queue', 'settings', 'help', 'address', 'address_draft'], true)) {
             $this->present($chat, $data, $messageId);
         }
     }
@@ -211,7 +214,7 @@ final class UpdateHandler
         return (int) ($sent['message_id'] ?? 0);
     }
 
-    /** Replaces the previous service screen and the pressed button; schedules stay in the chat. */
+    /** Replaces the previous service screen and the pressed button; kept screens stay in the chat. */
     private function open(Chat $chat, string $screen, ?int $pressedId = null): void
     {
         // Without queues the selection is shown instead of the schedule.
@@ -221,7 +224,7 @@ final class UpdateHandler
 
         $previous = $chat->menu_message_id;
         $shown = $this->show($chat, $screen);
-        $chat->update(['menu_message_id' => $screen === 'schedule' ? null : $shown]);
+        $chat->update(['menu_message_id' => $this->kept($chat, $screen) ? null : $shown]);
 
         $this->delete($chat->telegram_id, array_values(array_filter([$previous, $pressedId])));
     }
@@ -491,11 +494,17 @@ final class UpdateHandler
                 $this->updateKeyboard($chat, $screen);
                 $this->open($chat, $screen, $pressedId);
             } else {
-                $this->show($chat, $screen, $messageId);
+                $shown = $this->show($chat, $screen, $messageId);
+                $kept = $this->kept($chat, $screen);
 
-                // The service screen has turned into a schedule, which must stay.
-                if ($screen === 'schedule' && $chat->menu_message_id === $messageId && $chat->subscriptions()->exists()) {
+                if ($kept && $chat->menu_message_id === $messageId) {
+                    // The service screen has turned into a kept one, which must stay.
                     $chat->update(['menu_message_id' => null]);
+                } elseif (! $kept && $screen === 'address' && $chat->menu_message_id !== $messageId) {
+                    // A kept list has lost its last address and is a service screen again.
+                    $previous = $chat->menu_message_id;
+                    $chat->update(['menu_message_id' => $shown]);
+                    $this->delete($chat->telegram_id, array_values(array_filter([$previous])));
                 }
             }
         } catch (TelegramException $e) {
@@ -553,5 +562,16 @@ final class UpdateHandler
             Keyboards::addressDraft($draft['step'], $this->addresses->options($chat), $this->cities),
             $messageId,
         );
+    }
+
+    /** Screens that stay in the chat instead of being replaced by the next one. */
+    private function kept(Chat $chat, string $screen): bool
+    {
+        return match ($screen) {
+            'schedule' => $chat->subscriptions()->exists(),
+            // A finished draft is shown as the list.
+            'address', 'address_draft' => ($screen === 'address' || ! $this->addresses->isWaiting($chat)) && $chat->addresses()->exists(),
+            default => false,
+        };
     }
 }
