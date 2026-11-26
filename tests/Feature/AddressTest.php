@@ -57,7 +57,7 @@ class AddressTest extends TestCase
         parent::setUp();
         $this->travelTo(CarbonImmutable::parse('2026-11-25 12:00', 'Europe/Kyiv'));
         Http::fake(fn ($request) => $this->respond($request));
-        $this->chat = Chat::query()->create(['telegram_id' => 5, 'type' => 'private', 'active' => true, 'remind_minutes' => 30, 'keyboard_version' => Keyboards::version(5)]);
+        $this->chat = Chat::query()->create(['telegram_id' => 5, 'type' => 'private', 'active' => true, 'remind_minutes' => 30, 'perks_at' => now(), 'keyboard_version' => Keyboards::version(5, true)]);
         $this->chat->subscriptions()->create(['queue' => '1.1']);
         $this->publish('ГПВ');
         $this->poll();
@@ -246,7 +246,7 @@ class AddressTest extends TestCase
     public function test_partial_restoration_is_told_to_each_house(): void
     {
         $this->follow('пр. Соборний', '24');
-        $other = Chat::query()->create(['telegram_id' => 6, 'type' => 'private']);
+        $other = Chat::query()->create(['telegram_id' => 6, 'type' => 'private', 'perks_at' => now()]);
         $other->subscriptions()->create(['queue' => '1.1']);
         $this->follow('пр. Соборний', '25', $other);
         $id = $this->emergency(['22-28', '25']);
@@ -629,5 +629,46 @@ class AddressTest extends TestCase
         $this->assertSame(63, $this->chat->refresh()->menu_message_id);
         $this->say(Keyboards::GUIDE); // 68
         $this->assertDeleted(63);
+    }
+
+    public function test_only_the_first_users_get_perks_and_keep_them(): void
+    {
+        config(['perks.limit' => 2]);
+        $this->press('q+:2.1');
+        $this->assertTrue($this->chat->refresh()->perks_at->lessThan(now()->subSecond()));
+
+        $join = fn (int $id) => $this->update(['callback_query' => ['id' => 'x', 'data' => 'q+:1.1', 'message' => ['message_id' => 1, 'chat' => ['id' => $id, 'type' => 'private']]]]);
+        $join(6);
+        $join(7);
+        $this->assertNotNull(Chat::query()->where('telegram_id', 6)->sole()->perks_at);
+        $late = Chat::query()->where('telegram_id', 7)->sole();
+        $this->assertNull($late->perks_at);
+
+        // Leaving and coming back keeps the perks.
+        $member = fn (string $status) => ['my_chat_member' => ['chat' => ['id' => 6, 'type' => 'private'], 'new_chat_member' => ['status' => $status]]];
+        $this->update($member('kicked'));
+        $this->update($member('member'));
+        $this->update(['message' => ['message_id' => 50, 'text' => '/start', 'chat' => ['id' => 6, 'type' => 'private']]]);
+        $this->assertNotNull(Chat::query()->where('telegram_id', 6)->sole()->perks_at);
+    }
+
+    public function test_addresses_are_closed_without_perks(): void
+    {
+        $this->follow('пр. Соборний', '24');
+        $this->chat->update(['perks_at' => null, 'keyboard_version' => Keyboards::version(5, false)]);
+
+        $this->assertStringContainsString('Графік', $this->say(Keyboards::ADDRESS));
+        $this->assertStringNotContainsString('Відключення за адресою', $this->say(Keyboards::GUIDE));
+        foreach (['a+', 'a+:zaporizhzhia', 'as:1', 'address', 'address_draft'] as $data) {
+            $this->assertStringNotContainsString('адрес', $this->press($data), $data);
+        }
+        $this->press('a-:'.Address::query()->sole()->id);
+        $this->assertSame(1, Address::query()->count());
+        $this->assertNull($this->chat->refresh()->address_draft);
+        Http::assertNotSent(fn ($r) => in_array(Keyboards::ADDRESS, array_column(array_merge(...$r['reply_markup']['keyboard'] ?? []), 'text'), true));
+
+        $this->emergency();
+        $this->poll();
+        $this->assertCount(0, $this->texts());
     }
 }

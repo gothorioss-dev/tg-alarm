@@ -81,7 +81,7 @@ final class UpdateHandler
         }
         if ($screen = Keyboards::screen($text, $chat->telegram_id)) {
             $this->addresses->cancel($chat);
-            $screen = $this->access->screen($chat, $screen) ? $screen : 'queue';
+            $screen = $this->access->screen($chat, $screen) ? $screen : ($chat->subscriptions()->exists() ? 'schedule' : 'queue');
             $this->present($chat, $screen, pressedId: (int) $message['message_id']);
 
             return;
@@ -121,6 +121,12 @@ final class UpdateHandler
         if (! preg_match('/^(q[+-]?:|(queue|done|help|schedule)$)/', $data) && ! $this->access->screen($chat, 'settings')) {
             $this->answer($query['id'], $this->messages->queueFirst(), true);
             $this->present($chat, 'queue', $messageId);
+
+            return;
+        }
+        if (preg_match('/^(a[+-]|as:|address)/', $data) && ! $this->access->addresses($chat)) {
+            $this->answer($query['id']);
+            $this->present($chat, 'schedule', $messageId);
 
             return;
         }
@@ -186,7 +192,7 @@ final class UpdateHandler
     private function welcome(Chat $chat): void
     {
         $isNew = ! $chat->subscriptions()->exists();
-        $this->sendWithKeyboard($chat, $isNew ? $this->messages->guide() : $this->messages->welcomeBack());
+        $this->sendWithKeyboard($chat, $isNew ? $this->messages->guide($this->access->perks($chat)) : $this->messages->welcomeBack());
         // Delayed separately, so that the guide is not repeated.
         $this->present($chat, 'queue');
     }
@@ -194,7 +200,7 @@ final class UpdateHandler
     /** Replaces an outdated bottom keyboard; a schedule brings the keyboard itself. */
     private function updateKeyboard(Chat $chat, string $screen): void
     {
-        if ($chat->keyboard_version === Keyboards::version($chat->telegram_id)
+        if ($chat->keyboard_version === Keyboards::version($chat->telegram_id, $this->access->perks($chat))
             || ($screen === 'schedule' && $chat->subscriptions()->exists())) {
             return;
         }
@@ -206,10 +212,10 @@ final class UpdateHandler
     private function sendWithKeyboard(Chat $chat, string $text): int
     {
         $sent = $this->telegram->send($chat->telegram_id, $text, [
-            'reply_markup' => Keyboards::bottom($chat->telegram_id),
+            'reply_markup' => Keyboards::bottom($chat->telegram_id, $this->access->perks($chat)),
             'disable_notification' => $chat->silent,
         ]);
-        $chat->update(['keyboard_version' => Keyboards::version($chat->telegram_id)]);
+        $chat->update(['keyboard_version' => Keyboards::version($chat->telegram_id, $this->access->perks($chat))]);
 
         return (int) ($sent['message_id'] ?? 0);
     }
@@ -236,7 +242,7 @@ final class UpdateHandler
             'schedule' => $this->showSchedule($chat, $messageId),
             'queue' => $this->showQueues($chat, $messageId),
             'settings' => $this->render($chat, $this->messages->settings($chat->silent, $chat->remind_minutes), Keyboards::settings($chat), $messageId),
-            'help' => $this->render($chat, $this->messages->guide(), null, $messageId),
+            'help' => $this->render($chat, $this->messages->guide($this->access->perks($chat)), null, $messageId),
             'address' => $this->showAddresses($chat, $messageId),
             'address_draft' => $this->showAddressDraft($chat, $messageId),
             'invite' => $this->showInvite($chat, $messageId),
@@ -293,6 +299,7 @@ final class UpdateHandler
             }
 
             $chat->subscriptions()->create(['queue' => $queue]);
+            $this->access->admit($chat);
         }
 
         return [$this->messages->queueToggled($queue, $added), false];

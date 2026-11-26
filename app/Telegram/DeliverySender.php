@@ -13,7 +13,7 @@ final class DeliverySender
 {
     private const MAX_ATTEMPTS = 12;
 
-    public function __construct(private TelegramClient $telegram, private ProcessStatus $status) {}
+    public function __construct(private TelegramClient $telegram, private ProcessStatus $status, private Access $access) {}
 
     public function flush(DeliveryChannel $channel = DeliveryChannel::Broadcast, int $limit = 200): void
     {
@@ -76,7 +76,7 @@ final class DeliverySender
             }
 
             $messages[$id] = [$delivery->telegram_id, $delivery->text, [
-                'reply_markup' => Keyboards::bottom($delivery->telegram_id),
+                'reply_markup' => Keyboards::bottom($delivery->telegram_id, $this->access->perks($chat)),
                 // Service alerts always sound.
                 'disable_notification' => $chat !== null && $chat->silent && ! $isAdminAlert,
             ]];
@@ -100,7 +100,7 @@ final class DeliverySender
 
                     continue;
                 }
-                $chat?->update(['keyboard_version' => Keyboards::version($delivery->telegram_id)]);
+                $chat?->update(['keyboard_version' => Keyboards::version($delivery->telegram_id, $this->access->perks($chat))]);
                 $delivery->update(['status' => Delivery::SENT, 'sent_at' => now(), 'error' => null]);
             }
 

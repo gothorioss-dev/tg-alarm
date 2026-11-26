@@ -11,7 +11,7 @@ class Chat extends Model
 
     protected $attributes = ['silent' => false];
 
-    protected $casts = ['active' => 'boolean', 'silent' => 'boolean', 'telegram_id' => 'integer', 'remind_minutes' => 'integer', 'menu_message_id' => 'integer', 'address_draft' => 'array'];
+    protected $casts = ['active' => 'boolean', 'silent' => 'boolean', 'telegram_id' => 'integer', 'remind_minutes' => 'integer', 'menu_message_id' => 'integer', 'address_draft' => 'array', 'perks_at' => 'immutable_datetime'];
 
     /** @return HasMany<Subscription, $this> */
     public function subscriptions(): HasMany

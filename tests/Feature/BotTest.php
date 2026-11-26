@@ -113,7 +113,7 @@ class BotTest extends TestCase
         config(['sources.sources.telegram.priority' => 200]);
         $messages = app(Messages::class);
 
-        foreach ([$messages->guide()] as $text) {
+        foreach ([$messages->guide(true)] as $text) {
             $this->assertStringContainsString('<a href="https://www.zoe.com.ua/outage/">', $text);
             $this->assertStringContainsString('<a href="https://t.me/zoe_alarm">', $text);
             $this->assertStringNotContainsString('груп', $text);
@@ -121,7 +121,7 @@ class BotTest extends TestCase
         }
 
         config(['sources.sources.telegram.enabled' => false]);
-        $this->assertStringNotContainsString('t.me', $messages->guide());
+        $this->assertStringNotContainsString('t.me', $messages->guide(true));
     }
 
     private function assertDeleted(int $id, bool $deleted = true): void
@@ -136,7 +136,7 @@ class BotTest extends TestCase
         Http::fake(function ($r) use (&$next) {
             return Http::response(['ok' => true, 'result' => str_ends_with($r->url(), 'sendMessage') ? ['message_id' => $next++] : true]);
         });
-        $chat = Chat::query()->create(['telegram_id' => 5, 'type' => 'private', 'menu_message_id' => 40, 'keyboard_version' => Keyboards::version(5)]);
+        $chat = Chat::query()->create(['telegram_id' => 5, 'type' => 'private', 'menu_message_id' => 40, 'keyboard_version' => Keyboards::version(5, false)]);
         $chat->subscriptions()->create(['queue' => '1.1']);
 
         $this->update($this->message(Keyboards::SCHEDULE)); // 60
@@ -177,7 +177,7 @@ class BotTest extends TestCase
         $this->fake();
         Chat::query()->create(['telegram_id' => 5, 'type' => 'private'])->subscriptions()->create(['queue' => '1.1']);
 
-        foreach (array_merge(...Keyboards::bottom(5)['keyboard']) as $button) {
+        foreach (array_merge(...Keyboards::bottom(5, true)['keyboard']) as $button) {
             $this->assertNotNull(Keyboards::screen($button['text'], 5));
             $this->assertNotNull(Keyboards::screen(str_replace("\u{FE0F}", '', $button['text']), 5));
             $this->update($this->message($button['text']));
@@ -235,7 +235,7 @@ class BotTest extends TestCase
         $this->assertSame(1, $this->keyboardMessages());
         $this->update($this->message(Keyboards::GUIDE));
         $this->assertSame(1, $this->keyboardMessages());
-        $this->assertSame(Keyboards::version(5), $chat->refresh()->keyboard_version);
+        $this->assertSame(Keyboards::version(5, false), $chat->refresh()->keyboard_version);
 
         // A schedule carries the keyboard, so no extra message is needed.
         $chat->update(['keyboard_version' => 'old']);
@@ -304,9 +304,9 @@ class BotTest extends TestCase
     public function test_statistics_are_shown_to_the_admin_only(): void
     {
         $this->fake();
-        $this->assertNotContains(Keyboards::STATISTICS, array_column(array_merge(...Keyboards::bottom(5)['keyboard']), 'text'));
-        $this->assertContains(Keyboards::STATISTICS, array_column(array_merge(...Keyboards::bottom(999)['keyboard']), 'text'));
-        $this->assertNotSame(Keyboards::version(5), Keyboards::version(999));
+        $this->assertNotContains(Keyboards::STATISTICS, array_column(array_merge(...Keyboards::bottom(5, true)['keyboard']), 'text'));
+        $this->assertContains(Keyboards::STATISTICS, array_column(array_merge(...Keyboards::bottom(999, true)['keyboard']), 'text'));
+        $this->assertNotSame(Keyboards::version(5, false), Keyboards::version(999, false));
 
         foreach ([5 => ['5.2', '1.1'], 999 => ['5.2'], 6 => ['2.1'], 7 => []] as $id => $queues) {
             $chat = Chat::query()->create(['telegram_id' => $id, 'type' => 'private', 'active' => $id !== 6, 'silent' => $id === 5]);
@@ -560,7 +560,7 @@ class BotTest extends TestCase
                 : Http::response(['ok' => true, 'result' => ['message_id' => 60]]);
         });
         $this->freezeTime();
-        $chat = Chat::query()->create(['telegram_id' => 5, 'type' => 'private', 'keyboard_version' => Keyboards::version(5)]);
+        $chat = Chat::query()->create(['telegram_id' => 5, 'type' => 'private', 'keyboard_version' => Keyboards::version(5, false)]);
         $chat->subscriptions()->create(['queue' => '1.1']);
         $handler = app(UpdateHandler::class);
 

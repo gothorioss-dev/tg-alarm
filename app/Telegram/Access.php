@@ -15,13 +15,13 @@ final class Access
     {
         return in_array($screen, self::FREE, true)
             || ($screen === 'stats' && Keyboards::isAdmin($chat->telegram_id))
-            || $chat->subscriptions()->exists();
+            || ($screen === 'address' ? $this->addresses($chat) : $chat->subscriptions()->exists());
     }
 
     /** Outages by address. */
     public function addresses(Chat $chat): bool
     {
-        return $chat->subscriptions()->exists();
+        return $this->perks($chat) && $chat->subscriptions()->exists();
     }
 
     /**
@@ -32,6 +32,20 @@ final class Access
      */
     public function withAddresses(Builder $chats): Builder
     {
-        return $chats->whereHas('subscriptions');
+        return $chats->whereNotNull('perks_at')->whereHas('subscriptions');
+    }
+
+    /** Perks of the first users: outages by address for now. */
+    public function perks(?Chat $chat): bool
+    {
+        return $chat?->perks_at !== null;
+    }
+
+    /** Gives the perks to one of the first users who have selected a queue. */
+    public function admit(Chat $chat): void
+    {
+        if ($chat->perks_at === null && Chat::query()->whereNotNull('perks_at')->count() < (int) config('perks.limit')) {
+            $chat->update(['perks_at' => now()]);
+        }
     }
 }

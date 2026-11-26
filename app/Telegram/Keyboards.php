@@ -32,14 +32,15 @@ final class Keyboards
     /**
      * Main menu. A message carries either this or inline buttons.
      *
+     * @param  bool  $addresses  the address button is shown
      * @return array<string, mixed>
      */
-    public static function bottom(int $telegramId): array
+    public static function bottom(int $telegramId, bool $addresses): array
     {
         return [
             'keyboard' => [
                 [['text' => self::SCHEDULE], ['text' => self::QUEUES]],
-                [['text' => self::ADDRESS]],
+                ...($addresses ? [[['text' => self::ADDRESS]]] : []),
                 [['text' => self::SETTINGS], ['text' => self::GUIDE]],
                 [['text' => self::INVITE], ...(self::isAdmin($telegramId) ? [['text' => self::STATISTICS]] : [])],
             ],
@@ -53,9 +54,9 @@ final class Keyboards
     }
 
     /** Changes together with the bottom keyboard. */
-    public static function version(int $telegramId): string
+    public static function version(int $telegramId, bool $addresses): string
     {
-        return substr(hash('sha256', json_encode(self::bottom($telegramId), JSON_THROW_ON_ERROR)), 0, 8);
+        return substr(hash('sha256', json_encode(self::bottom($telegramId, $addresses), JSON_THROW_ON_ERROR)), 0, 8);
     }
 
     /** Screen opened by a bottom button, null for any other text. */
