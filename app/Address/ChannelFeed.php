@@ -156,6 +156,14 @@ final class ChannelFeed implements OutageFeed
             return;
         }
 
+        // Telegram cannot fetch the file of a post that is gone: it has been deleted, often to be posted again.
+        if ($e instanceof TelegramException && $e->getCode() === 400 && str_contains($e->getMessage(), 'failed to get HTTP URL content') && $this->isDeleted($post)) {
+            Log::info("Post {$post->message_id} of {$this->channel} is deleted");
+            $post->update(['status' => ChannelPost::SKIPPED]);
+
+            return;
+        }
+
         $attempts = $post->attempts + 1;
         $exhausted = $attempts >= (int) config('addresses.files.attempts');
         $post->update([
@@ -168,6 +176,18 @@ final class ChannelFeed implements OutageFeed
             $this->outbox->admin("post-failed:{$city->code}:{$post->message_id}:".substr($post->hash, 0, 8),
                 "Не вдалося обробити пост про відключення, людей за ним не сповіщено: https://t.me/{$this->channel}/{$post->message_id}\n{$e->getMessage()}");
         }
+    }
+
+    private function isDeleted(ChannelPost $post): bool
+    {
+        try {
+            $page = $this->reader->page($this->channel, $post->message_id + 1);
+        } catch (SourceException) {
+            return false;
+        }
+
+        // An empty page says nothing.
+        return $page !== [] && ! isset($page[$post->message_id]);
     }
 
     private function outage(City $city, ChannelPost $post): void

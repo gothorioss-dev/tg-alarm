@@ -46,6 +46,8 @@ class AddressTest extends TestCase
 
     private bool $downloads = true;
 
+    private string $downloadError = 'wrong type';
+
     private int $status = 200;
 
     private Chat $chat;
@@ -82,7 +84,7 @@ class AddressTest extends TestCase
 
             return $this->downloads
                 ? Http::response(['ok' => true, 'result' => ['message_id' => 900 + $id, 'document' => ['file_id' => (string) $id, 'file_name' => $this->posts[$id]['file'], 'file_size' => 100]]])
-                : Http::response(['ok' => false, 'error_code' => 400, 'description' => 'wrong type'], 400);
+                : Http::response(['ok' => false, 'error_code' => 400, 'description' => $this->downloadError], 400);
         }
         if (str_ends_with($url, 'getFile')) {
             return Http::response(['ok' => true, 'result' => ['file_path' => "documents/{$request['file_id']}"]]);
@@ -398,6 +400,23 @@ class AddressTest extends TestCase
         $this->poll(70);
         $this->assertStringContainsString('людей за ним не сповіщено', $this->last());
         $this->assertSame(999, Delivery::query()->latest('id')->value('telegram_id'));
+    }
+
+    public function test_deleted_post_is_skipped_without_an_alarm(): void
+    {
+        $this->follow('пр. Соборний', '24');
+        $this->downloads = false;
+        $this->downloadError = 'Bad Request: failed to get HTTP URL content';
+        $deleted = $this->emergency();
+        unset($this->posts[$deleted]);
+        $this->publish('x');
+        // Still in the channel: it is retried.
+        $kept = $this->emergency(file: 'ЗМЕМ_2.xlsx');
+        $this->poll();
+        $this->assertSame(ChannelPost::SKIPPED, ChannelPost::query()->where('message_id', $deleted)->sole()->status);
+        $this->assertSame(ChannelPost::PENDING, ChannelPost::query()->where('message_id', $kept)->sole()->status);
+        $this->assertSame(1, ChannelPost::query()->where('message_id', $kept)->sole()->attempts);
+        $this->assertCount(0, $this->texts());
     }
 
     public function test_broken_table_does_not_hold_up_others(): void
