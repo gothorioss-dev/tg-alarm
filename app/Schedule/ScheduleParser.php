@@ -125,7 +125,8 @@ final class ScheduleParser
 
             $queues[$queue] = array_map(
                 $this->parseInterval(...),
-                preg_split('/\s*[,;]\s*/u', rtrim($match[3], ' .;,')),
+                // "10:30 – 15:30. 19:30 – 22:00": a full stop separates intervals too.
+                preg_split('/\s*[,;]\s*|\.\s+(?=\d)/u', rtrim($match[3], ' .;,')),
             );
         }
 

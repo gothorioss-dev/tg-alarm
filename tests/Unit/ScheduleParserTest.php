@@ -28,6 +28,15 @@ class ScheduleParserTest extends TestCase
         $this->assertSame('2026-11-23', $a->date);
     }
 
+    public function test_full_stop_separates_intervals(): void
+    {
+        $a = $this->parse('1.1: 10:30 – 15:30. 19:30 - 22:00');
+        $b = $this->parse('1.1: 10:30 – 15:30, 19:30 – 22:00');
+
+        $this->assertSame($a->schedule->hash(), $b->schedule->hash());
+        $this->assertCount(2, $a->schedule->intervals('1.1'));
+    }
+
     public function test_year_and_declared_time_cross_midnight(): void
     {
         $p = $this->parse('1.1: 07:00 – 12:00', '2026-12-31 22:05:00', 'ОНОВЛЕНО ГПВ НА 1 СІЧНЯ (оновлено 23:50)');
