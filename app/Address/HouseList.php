@@ -14,6 +14,8 @@ final class HouseList
     public function __construct(string $text)
     {
         $number = null;
+        // "57 (9 пов), п.1,2, 59": entrances and blocks of the house before are put in brackets, their commas do not split houses.
+        $text = (string) preg_replace('/(?<!\p{L})((?:п|під)\.\s*\d+(?:\s*-\s*\d+)?(?:,\d+(?:\s*-\s*\d+)?)*|блок\s+\p{L}(?:,\p{L})*)(?![^(]*\))/u', '($1)', $text);
         $parts = array_filter(array_map(trim(...), preg_split('/[|;,](?![^(]*\))/u', $text) ?: []), fn (string $part) => $part !== '');
 
         if ($parts === []) {
@@ -70,6 +72,13 @@ final class HouseList
             $this->add('house', key: $text, note: $note);
 
             return (int) $match[1];
+        }
+        // Only a note: a part of the house before.
+        if ($text === '' && $note !== '' && ($last = array_key_last($this->items)) !== null && $this->items[$last]['type'] === 'house') {
+            $previous = $this->items[$last]['note'];
+            $this->items[$last]['note'] = $previous === '' ? $note : "{$previous}, {$note}";
+
+            return $number;
         }
         if ($number !== null && preg_match('/^\p{L}$/u', $text)) {
             $this->add('house', key: $number.$text, note: $note);
