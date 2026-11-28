@@ -15,11 +15,12 @@ final class OutageFile
     private const MAX_ROWS = 5000;
 
     /**
-     * @return non-empty-list<FileRow>
+     * @param  string|null  $locality  rows of other places are left out, when the table names them
+     * @return list<FileRow> empty only when all rows are of other places
      *
      * @throws SourceException
      */
-    public function read(string $path): array
+    public function read(string $path, ?string $locality = null): array
     {
         $zip = new ZipArchive;
 
@@ -28,7 +29,7 @@ final class OutageFile
         }
 
         try {
-            return $this->rows($this->cells($zip));
+            return $this->rows($this->cells($zip), $locality);
         } finally {
             $zip->close();
         }
@@ -36,13 +37,14 @@ final class OutageFile
 
     /**
      * @param  list<array<string, string>>  $table
-     * @return non-empty-list<FileRow>
+     * @return list<FileRow>
      */
-    private function rows(array $table): array
+    private function rows(array $table, ?string $locality): array
     {
         [$header, $columns] = $this->columns($table);
         $rows = [];
-        $last = ['street' => '', 'reason' => '', 'start_date' => '', 'start_time' => '', 'end_date' => '', 'end_time' => ''];
+        $last = ['locality' => '', 'street' => '', 'reason' => '', 'start_date' => '', 'start_time' => '', 'end_date' => '', 'end_time' => ''];
+        $others = 0;
 
         foreach (array_slice($table, $header + 1) as $cells) {
             $get = fn (string $name) => $cells[$columns[$name]] ?? '';
@@ -66,11 +68,26 @@ final class OutageFile
                 throw new SourceException('A row without a street or a start: '.implode(' | ', $cells));
             }
 
+            // A place that is not named is the one of the file.
+            if ($locality !== null && $last['locality'] !== '' && ! $this->isLocality($last['locality'], $locality)) {
+                $others++;
+
+                continue;
+            }
+
             $end = $this->time($last['end_date'], $last['end_time']);
             $rows[] = new FileRow($last['street'], $houses, Kind::detect($last['reason']), $start, $end !== null && $end > $start ? $end : null);
         }
 
-        return $rows ?: throw new SourceException('The table is empty');
+        return $rows !== [] || $others > 0 ? $rows : throw new SourceException('The table is empty');
+    }
+
+    /** "м. Запоріжжя", "м.Запоріжжя" and "Запоріжжя" are one place. */
+    private function isLocality(string $text, string $name): bool
+    {
+        $text = (string) preg_replace('/^(?:м\.|місто)\s*/u', '', AddressText::normalize($text));
+
+        return $text === AddressText::normalize($name);
     }
 
     /**
@@ -84,6 +101,7 @@ final class OutageFile
 
             foreach ($cells as $column => $text) {
                 $name = match (true) {
+                    preg_match('/^населен/ui', $text) === 1 => 'locality',
                     preg_match('/^вулиц/ui', $text) === 1 => 'street',
                     preg_match('/^буд/ui', $text) === 1 => 'houses',
                     preg_match('/^причин/ui', $text) === 1 => 'reason',

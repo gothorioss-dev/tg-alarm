@@ -41,6 +41,7 @@ final class ChannelFeed implements OutageFeed
         private AddressTracker $tracker,
         private Outbox $outbox,
         private ProcessStatus $status,
+        private CityRegistry $cities,
     ) {}
 
     public function poll(City $city): void
@@ -212,7 +213,15 @@ final class ChannelFeed implements OutageFeed
             return;
         }
 
-        $rows = $this->rows($post);
+        $rows = $this->rows($city, $post);
+
+        // The file is of other places only.
+        if ($rows === []) {
+            $post->update(['status' => ChannelPost::SKIPPED]);
+
+            return;
+        }
+
         $start = min(array_map(fn (FileRow $row) => $row->startsAt, $rows));
         $announced = preg_match('/буде\s+знеструмлено/ui', $post->text) === 1 || $start > $post->published_at->addMinutes(5);
         $key = $this->key((string) $post->file);
@@ -272,7 +281,13 @@ final class ChannelFeed implements OutageFeed
             return;
         }
 
-        $rows = $hasFile ? $this->rows($post) : [];
+        $rows = $hasFile ? $this->rows($city, $post) : [];
+
+        if ($hasFile && $rows === []) {
+            $post->update(['status' => ChannelPost::SKIPPED, 'city_event_id' => $event->id]);
+
+            return;
+        }
 
         if ($rows !== [] && $end !== null && ! $post->silent) {
             $this->checkEnd($city, $post, $rows, $end);
@@ -358,8 +373,8 @@ final class ChannelFeed implements OutageFeed
         return false;
     }
 
-    /** @return non-empty-list<FileRow> */
-    private function rows(ChannelPost $post): array
+    /** @return list<FileRow> empty when the file is of other places only */
+    private function rows(City $city, ChannelPost $post): array
     {
         $this->downloads++;
         // A long run is not a hang.
@@ -367,7 +382,7 @@ final class ChannelFeed implements OutageFeed
         $path = $this->postFile->download($this->channel, $post->message_id, (string) $post->file, (int) config('addresses.files.max_size'));
 
         try {
-            return $this->outageFile->read($path);
+            return $this->outageFile->read($path, $this->cities->name($city->code));
         } finally {
             @unlink($path);
         }

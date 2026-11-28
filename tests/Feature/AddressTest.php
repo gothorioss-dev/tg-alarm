@@ -129,11 +129,11 @@ class AddressTest extends TestCase
         return $id;
     }
 
-    /** Rows: street, houses, reason, start date, start time, end date, end time; empty values are as above. */
+    /** Rows: street, houses, reason, start date, start time, end date, end time, place (the city by default); empty values are as above. */
     private function table(array $rows): string
     {
         $rows = [['', '', 'ЗМЕМ'], ['№ з/п', 'Населений пункт', 'Вулиця', 'Буд', 'Причина', 'Початок перерви електропостачання', '', 'Орієнтовне відновлення електропостачання'],
-            ['', '', '', '', '', 'Дата', 'Час', 'Дата ', 'Час'], ...array_map(fn (array $row) => ['', 'м. Запоріжжя', ...$row], $rows)];
+            ['', '', '', '', '', 'Дата', 'Час', 'Дата ', 'Час'], ...array_map(fn (array $row) => ['', $row[7] ?? 'м. Запоріжжя', ...array_slice($row, 0, 7)], $rows)];
         $xml = '';
 
         foreach ($rows as $n => $row) {
@@ -386,6 +386,25 @@ class AddressTest extends TestCase
         $this->poll();
         $this->assertSame(0, CityEvent::query()->count());
         Http::assertNotSent(fn ($r) => str_ends_with($r->url(), 'sendDocument'));
+    }
+
+    public function test_rows_of_other_places_are_left_out(): void
+    {
+        $this->follow('пр. Соборний', '24');
+        $this->follow('пр. Соборний', '40');
+        $this->publish(self::ACTUAL, null, 'ЗМЕМ_ПСР_1.xlsx', [
+            ['пр. Соборний', '24', 'Термінова', '25.11.26', '12-00', '25.11.26', '17-00', 'м.Запоріжжя'],
+            ['вул. Сільська', '1', '', '', '', '', '', 'с. Відрадне'],
+            // A merged cell of the place is carried down: the village too.
+            ['пр. Соборний', '40', '', '', '', '', '', ''],
+        ]);
+        $other = $this->publish(self::ACTUAL, null, 'ЗМЕМ_ПСР_2.xlsx', [['вул. Сільська', '2', 'Термінова', '25.11.26', '12-00', '25.11.26', '17-00', 'с. Відрадне']]);
+        $this->poll();
+        $this->assertCount(1, $this->texts());
+        $this->assertSame(['24'], CityEvent::query()->sole()->rows()->pluck('houses')->all());
+        $this->assertSame(0, Street::query()->where('key', AddressText::normalize('вул. Сільська'))->count());
+        $this->assertSame(ChannelPost::SKIPPED, ChannelPost::query()->where('message_id', $other)->sole()->status);
+        $this->assertSame(0, Delivery::query()->where('telegram_id', 999)->count());
     }
 
     public function test_failed_file_is_retried_then_reported_and_its_reply_waits(): void
