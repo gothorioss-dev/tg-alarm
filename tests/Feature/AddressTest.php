@@ -48,6 +48,11 @@ class AddressTest extends TestCase
 
     private string $downloadError = 'wrong type';
 
+    /** @var array<int, string> the file that Telegram keeps for a link, by post; with "?single" too when it is "always" */
+    private array $staleFiles = [];
+
+    private bool $alwaysStale = false;
+
     private int $status = 200;
 
     private Chat $chat;
@@ -81,9 +86,10 @@ class AddressTest extends TestCase
         }
         if (str_ends_with($url, 'sendDocument')) {
             $id = (int) basename($request['document']);
+            $stale = ($this->alwaysStale || ! str_contains($request['document'], '?')) ? ($this->staleFiles[$id] ?? null) : null;
 
             return $this->downloads
-                ? Http::response(['ok' => true, 'result' => ['message_id' => 900 + $id, 'document' => ['file_id' => (string) $id, 'file_name' => $this->posts[$id]['file'], 'file_size' => 100]]])
+                ? Http::response(['ok' => true, 'result' => ['message_id' => 900 + $id, 'document' => ['file_id' => (string) $id, 'file_name' => $stale ?? $this->posts[$id]['file'], 'file_size' => 100]]])
                 : Http::response(['ok' => false, 'error_code' => 400, 'description' => $this->downloadError], 400);
         }
         if (str_ends_with($url, 'getFile')) {
@@ -439,6 +445,40 @@ class AddressTest extends TestCase
         $this->poll();
         $this->assertStringContainsString('до 22:00', $this->last());
         $this->assertCount(2, $this->texts());
+    }
+
+    public function test_replaced_file_is_another_outage_and_the_old_one_is_kept(): void
+    {
+        $this->follow('пр. Соборний', '24');
+        $this->follow('пр. Соборний', '40');
+        $first = $this->emergency(['22-28'], 'ЗМЕМ_ПСР_5.xlsx');
+        // Posted again with the same file by mistake.
+        $wrong = $this->emergency(['22-28'], 'ЗМЕМ_ПСР_5.xlsx');
+        $this->poll();
+        $this->assertSame(1, CityEvent::query()->count());
+
+        $this->posts[$wrong]['file'] = 'ЗМЕМ_ПСР_8.xlsx';
+        $this->files[$wrong] = $this->table([['пр. Соборний', '40', 'аварійна', '25.11.26', '11-50', '25.11.26', '21-00']]);
+        $this->staleFiles[$wrong] = 'ЗМЕМ_ПСР_5.xlsx';
+        $this->poll();
+        Http::assertSent(fn ($r) => str_ends_with($r->url(), 'sendDocument') && $r['document'] === "https://t.me/zoe_alarm/{$wrong}?single");
+        $this->assertSame(2, CityEvent::query()->count());
+        $this->assertSame('22-28', ChannelPost::query()->where('message_id', $first)->sole()->event->rows()->sole()->houses);
+        $this->assertSame('40', ChannelPost::query()->where('message_id', $wrong)->sole()->event->rows()->sole()->houses);
+    }
+
+    public function test_old_file_given_again_is_reported_at_once(): void
+    {
+        $this->follow('пр. Соборний', '24');
+        $id = $this->emergency();
+        $this->poll();
+        $this->posts[$id]['file'] = 'ЗМЕМ_ПСР_8.xlsx';
+        $this->staleFiles[$id] = 'ЗМЕМ_ПСР_7_25_11_26.xlsx';
+        $this->alwaysStale = true;
+        $this->poll();
+        $this->assertSame(ChannelPost::FAILED, ChannelPost::query()->where('message_id', $id)->sole()->status);
+        $this->assertStringContainsString('Telegram віддає старий', $this->last());
+        $this->assertSame(999, Delivery::query()->latest('id')->value('telegram_id'));
     }
 
     public function test_unknown_reply_is_reported_to_the_admin_only(): void

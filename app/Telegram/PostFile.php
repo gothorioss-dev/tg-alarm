@@ -26,17 +26,19 @@ final class PostFile
             throw new SourceException('TELEGRAM_ADMIN_ID is needed to get files');
         }
 
-        $message = $this->telegram->call('sendDocument', [
-            'chat_id' => $chatId,
-            'document' => "https://t.me/{$channel}/{$messageId}",
-            'disable_notification' => true,
-        ]);
+        $message = $this->send($chatId, "https://t.me/{$channel}/{$messageId}");
+
+        // The old file of an edited post: another link is fetched anew.
+        if (($message['document']['file_name'] ?? '') !== $name) {
+            $this->delete($chatId, (int) $message['message_id']);
+            $message = $this->send($chatId, "https://t.me/{$channel}/{$messageId}?single");
+        }
 
         try {
             $document = $message['document'] ?? null;
 
             if ($document === null || ($document['file_name'] ?? '') !== $name) {
-                throw new SourceException("Post {$messageId} has another file: ".($document['file_name'] ?? 'none'));
+                throw new OtherFileException("Post {$messageId} has another file: ".($document['file_name'] ?? 'none'));
             }
             if (($document['file_size'] ?? 0) > $maxSize) {
                 throw new SourceException("File of post {$messageId} is too big");
@@ -51,6 +53,12 @@ final class PostFile
         file_put_contents($path, $content);
 
         return $path;
+    }
+
+    /** @return array<string, mixed> */
+    private function send(int $chatId, string $link): array
+    {
+        return $this->telegram->call('sendDocument', ['chat_id' => $chatId, 'document' => $link, 'disable_notification' => true]);
     }
 
     private function delete(int $chatId, int $messageId): void

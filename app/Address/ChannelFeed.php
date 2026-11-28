@@ -8,6 +8,7 @@ use App\Models\City;
 use App\Models\CityEvent;
 use App\Monitor\ProcessStatus;
 use App\Sources\SourceException;
+use App\Telegram\OtherFileException;
 use App\Telegram\PostFile;
 use App\Telegram\TelegramException;
 use Carbon\CarbonImmutable;
@@ -106,6 +107,8 @@ final class ChannelFeed implements OutageFeed
                     $existing->update([
                         'text' => $post['text'], 'file' => $post['file'], 'hash' => $this->hash($post),
                         'status' => $this->initialStatus($post), 'attempts' => 0, 'available_at' => now(),
+                        // Another file is another outage; the one of the old file may belong to other posts too.
+                        ...($existing->reply_to === null && $this->key((string) $existing->file) !== $this->key((string) $post['file']) ? ['city_event_id' => null] : []),
                     ]);
                 }
             }
@@ -165,7 +168,8 @@ final class ChannelFeed implements OutageFeed
         }
 
         $attempts = $post->attempts + 1;
-        $exhausted = $attempts >= (int) config('addresses.files.attempts');
+        // Telegram keeps giving the old file: retries do not help.
+        $exhausted = $attempts >= (int) config('addresses.files.attempts') || $e instanceof OtherFileException;
         $post->update([
             'attempts' => $attempts,
             'available_at' => now()->addMinutes(2 ** ($attempts - 1)),
@@ -174,7 +178,8 @@ final class ChannelFeed implements OutageFeed
 
         if ($exhausted) {
             $this->outbox->admin("post-failed:{$city->code}:{$post->message_id}:".substr($post->hash, 0, 8),
-                "Не вдалося обробити пост про відключення, людей за ним не сповіщено: https://t.me/{$this->channel}/{$post->message_id}\n{$e->getMessage()}");
+                "Не вдалося обробити пост про відключення, людей за ним не сповіщено: https://t.me/{$this->channel}/{$post->message_id}\n"
+                .($e instanceof OtherFileException ? "Файл у пості замінено, а Telegram віддає старий.\n" : '').$e->getMessage());
         }
     }
 
