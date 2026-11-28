@@ -243,6 +243,19 @@ class AddressTest extends TestCase
         $this->assertCount(3, $this->texts());
     }
 
+    public function test_extension_with_a_date_in_brackets_is_read(): void
+    {
+        $this->follow('пр. Соборний', '24');
+        $id = $this->emergency();
+        $this->poll();
+        $reply = $this->publish('Шановні споживачі! Увага! Зміна орієнтовного часу відновлення електропостачання. Аварійні роботи продовжено до 16-00  (26.11.2026).', $id);
+        $this->poll();
+        $this->assertStringContainsString('до 16:00 (26 листопада)', $this->last());
+        $this->publish('Шановні споживачі! Увага! Зміна орієнтовного часу відновлення електропостачання. Аварійні роботи продовжено до 22:00 (26.11.2026).', $reply);
+        $this->poll();
+        $this->assertStringContainsString('до 22:00 (26 листопада)', $this->last());
+    }
+
     public function test_partial_restoration_is_told_to_each_house(): void
     {
         $this->follow('пр. Соборний', '24');

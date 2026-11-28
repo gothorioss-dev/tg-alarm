@@ -25,7 +25,8 @@ final class ChannelFeed implements OutageFeed
 
     private const RESTORED = '/^(?:Шановні споживачі\W*)?(?:Увага\W*)?Електропостачання\s+(?:повністю\s+)?відновлено(?:\s+повністю)?\W*$/ui';
 
-    private const EXTENDED = '/продовжено\s+до\s+(\d{1,2})[-:.](\d{2})\s+(\d{1,2})\.(\d{1,2})\.(\d{4})/ui';
+    /** "продовжено до 16-00 27.11.2026", the date may be in brackets. */
+    private const EXTENDED = '/продовжено\s+до\s+(\d{1,2})[-:.](\d{2})\s+\(?(\d{1,2})\.(\d{1,2})\.(\d{4})/ui';
 
     private int $downloads = 0;
 
