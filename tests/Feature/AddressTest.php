@@ -500,6 +500,29 @@ class AddressTest extends TestCase
         $this->assertSame(999, Delivery::query()->latest('id')->value('telegram_id'));
     }
 
+    public function test_failed_post_is_retried_by_the_command_as_another_outage(): void
+    {
+        $this->follow('пр. Соборний', '24');
+        $this->follow('пр. Соборний', '40');
+        $first = $this->emergency(['22-28'], 'ЗМЕМ_ПСР_5.xlsx');
+        $wrong = $this->emergency(['22-28'], 'ЗМЕМ_ПСР_5.xlsx');
+        $this->poll();
+        $this->posts[$wrong]['file'] = 'ЗМЕМ_ПСР_8.xlsx';
+        $this->files[$wrong] = $this->table([['пр. Соборний', '40', 'аварійна', '25.11.26', '11-50', '25.11.26', '21-00']]);
+        $this->staleFiles[$wrong] = 'ЗМЕМ_ПСР_5.xlsx';
+        $this->alwaysStale = true;
+        $this->poll();
+        $this->assertSame(ChannelPost::FAILED, ChannelPost::query()->where('message_id', $wrong)->sole()->status);
+
+        $this->alwaysStale = false;
+        $this->staleFiles = [];
+        $this->artisan('app:retry-post', ['ids' => [$wrong, $first, 1]])->assertFailed();
+        $this->poll();
+        $this->assertSame(ChannelPost::DONE, ChannelPost::query()->where('message_id', $wrong)->sole()->status);
+        $this->assertSame('22-28', ChannelPost::query()->where('message_id', $first)->sole()->event->rows()->sole()->houses);
+        $this->assertSame('40', ChannelPost::query()->where('message_id', $wrong)->sole()->event->rows()->sole()->houses);
+    }
+
     public function test_unknown_reply_is_reported_to_the_admin_only(): void
     {
         $this->follow('пр. Соборний', '24');
