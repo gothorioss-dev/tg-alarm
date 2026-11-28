@@ -108,8 +108,6 @@ final class ChannelFeed implements OutageFeed
                     $existing->update([
                         'text' => $post['text'], 'file' => $post['file'], 'hash' => $this->hash($post),
                         'status' => $this->initialStatus($post), 'attempts' => 0, 'available_at' => now(),
-                        // Another file is another outage; the one of the old file may belong to other posts too.
-                        ...($existing->reply_to === null && $this->key((string) $existing->file) !== $this->key((string) $post['file']) ? ['city_event_id' => null] : []),
                     ]);
                 }
             }
@@ -229,7 +227,8 @@ final class ChannelFeed implements OutageFeed
         DB::transaction(function () use ($city, $post, $rows, $announced, $start, $key) {
             // The write goes first: it locks the database.
             $post->update(['status' => ChannelPost::DONE]);
-            $event = $post->event ?? CityEvent::query()->where('city_id', $city->id)->where('key', $key)->whereNull('closed_at')->latest('id')->first()
+            // A replaced file is another outage; the one of the old file may belong to other posts too.
+            $event = ($post->event?->key === $key ? $post->event : null) ?? CityEvent::query()->where('city_id', $city->id)->where('key', $key)->whereNull('closed_at')->latest('id')->first()
                 ?? new CityEvent(['city_id' => $city->id, 'key' => $key]);
 
             // An edited announcement says nothing new after the start or a reply.
